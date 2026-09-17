@@ -63,6 +63,28 @@ final class DriverMonitor: ObservableObject {
         cameraManager.stop(completion: completion)
     }
 
+    // MARK: - External frames (MultiCam)
+
+    /// Activates attention processing without starting the legacy single-camera `CameraManager`.
+    func beginExternalFrameProcessing() {
+        cameraError = nil
+        lookingAwayStartedAt = nil
+        attentionState = .noFace
+        isRunning = true
+    }
+
+    /// Ends external-frame mode. Does not force-reset `isProcessingFrame`.
+    func endExternalFrameProcessing() {
+        isRunning = false
+        lookingAwayStartedAt = nil
+        attentionState = .noFace
+    }
+
+    /// Routes a MultiCam front-camera buffer into the existing Vision path.
+    nonisolated func processExternalFrame(_ pixelBuffer: CVPixelBuffer) {
+        handleFrame(pixelBuffer)
+    }
+
     // MARK: - Frame intake
 
     /// Called on the camera frame queue (not the main thread).
@@ -117,7 +139,11 @@ final class DriverMonitor: ObservableObject {
         observations: [VNFaceObservation],
         yawThreshold: Double
     ) -> DriverAttentionState {
-        guard observations.count == 1, let face = observations.first else {
+        // When multiple faces are visible, provisionally treat the largest face as the driver.
+        guard let face = observations.max(by: {
+            ($0.boundingBox.width * $0.boundingBox.height) <
+            ($1.boundingBox.width * $1.boundingBox.height)
+        }) else {
             return .noFace
         }
 

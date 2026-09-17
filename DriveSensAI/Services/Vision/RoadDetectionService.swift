@@ -117,6 +117,40 @@ final class RoadDetectionService: ObservableObject {
         }
     }
 
+    // MARK: - External frames (MultiCam)
+
+    /// Activates road detection without starting the legacy single-camera `CameraManager`.
+    /// Model-unavailable leaves driver monitoring unaffected.
+    func beginExternalFrameProcessing() {
+        cameraError = nil
+        detections = []
+
+        guard isModelReady else {
+            state = .modelUnavailable
+            isRunning = false
+            print("[RoadDetector] External mode — model unavailable (driver path unaffected).")
+            return
+        }
+
+        state = .clear
+        isRunning = true
+        print("[RoadDetector] External frame processing active.")
+    }
+
+    /// Ends external-frame mode. Does not force-reset `isProcessingFrame`.
+    func endExternalFrameProcessing() {
+        isRunning = false
+        detections = []
+        if isModelReady {
+            state = .clear
+        }
+    }
+
+    /// Routes a MultiCam rear-camera buffer into the existing Core ML path.
+    nonisolated func processExternalFrame(_ pixelBuffer: CVPixelBuffer) {
+        handleFrame(pixelBuffer)
+    }
+
     // MARK: - Model loading
 
     /// Loads the bundled `RoadObjectDetector` Core ML model once.
