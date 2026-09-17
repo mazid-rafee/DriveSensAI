@@ -9,3 +9,15 @@ xcuserdata/
 *.dSYM.zip
 *.dSYM
 .DS_Store
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+.build/
+
+# CocoaPods / Carthage / fastlane
+Carthage/Build/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output

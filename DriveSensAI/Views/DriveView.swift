@@ -7,6 +7,7 @@ import SwiftUI
 
 struct DriveView: View {
     @StateObject private var driverMonitor = DriverMonitor()
+    @State private var showRoadDebug = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -32,15 +33,36 @@ struct DriveView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer()
+
+            // Temporary Milestone 2 entry point — stops front camera before rear starts.
+            Button("Test Road Detection") {
+                driverMonitor.stop()
+                showRoadDebug = true
+            }
+            .buttonStyle(.bordered)
+            .padding(.bottom, 8)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
         .onAppear {
-            driverMonitor.start()
+            // Restore front camera when returning from road debug (or first launch).
+            if !showRoadDebug {
+                driverMonitor.start()
+            }
         }
         .onDisappear {
-            driverMonitor.stop()
+            // Leaving DriveView entirely (e.g. app background / teardown).
+            if !showRoadDebug {
+                driverMonitor.stop()
+            }
+        }
+        .fullScreenCover(isPresented: $showRoadDebug, onDismiss: {
+            driverMonitor.start()
+        }) {
+            RoadDebugView()
         }
     }
 

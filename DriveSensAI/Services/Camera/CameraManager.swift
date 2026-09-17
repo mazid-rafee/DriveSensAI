@@ -21,9 +21,9 @@ enum CameraError: LocalizedError, Equatable {
         case .permissionRestricted:
             return "Camera access is restricted on this device."
         case .cameraUnavailable:
-            return "Front camera is unavailable."
+            return "The requested camera is unavailable."
         case .cannotAddInput:
-            return "Could not configure the front camera input."
+            return "Could not configure the camera input."
         case .cannotAddOutput:
             return "Could not configure camera video output."
         case .configurationFailed(let message):
@@ -32,8 +32,10 @@ enum CameraError: LocalizedError, Equatable {
     }
 }
 
-/// Owns the front-camera AVCaptureSession and delivers frames off the main thread.
+/// Owns a single AVCaptureSession and delivers frames off the main thread.
+/// Defaults to the front camera so Milestone 1 behavior is unchanged.
 nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
+    private let position: AVCaptureDevice.Position
     private let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "com.drivesensai.camera.session")
     private let videoOutput = AVCaptureVideoDataOutput()
@@ -46,6 +48,12 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
 
     var isRunning: Bool {
         session.isRunning
+    }
+
+    /// - Parameter position: `.front` (default) for driver monitoring; `.back` for road detection.
+    init(position: AVCaptureDevice.Position = .front) {
+        self.position = position
+        super.init()
     }
 
     func requestAccessAndStart(completion: @escaping (Result<Void, CameraError>) -> Void) {
@@ -120,7 +128,7 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
 
         session.sessionPreset = .medium
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
             throw CameraError.cameraUnavailable
         }
 
@@ -151,8 +159,9 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
             if connection.isVideoRotationAngleSupported(90) {
                 connection.videoRotationAngle = 90
             }
+            // Mirror only the front camera (driver-facing preview semantics).
             if connection.isVideoMirroringSupported {
-                connection.isVideoMirrored = true
+                connection.isVideoMirrored = (position == .front)
             }
         }
     }
