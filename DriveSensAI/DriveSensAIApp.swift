@@ -11,7 +11,7 @@ import SwiftUI
 struct DriveSensAIApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            DriveView()
         }
     }
 }
