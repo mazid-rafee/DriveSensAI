@@ -27,6 +27,9 @@ final class RoadDetectionService: ObservableObject {
     /// Roughly 5 inferences/sec.
     nonisolated static let minimumInferenceInterval: TimeInterval = 0.2
 
+    /// Log average inference time every N completed inferences.
+    nonisolated static let inferenceTimingSampleCount: Int = 20
+
     /// COCO-style labels we care about for road monitoring (easy to extend later).
     nonisolated static let relevantLabels: Set<String> = [
         "person",
@@ -47,10 +50,18 @@ final class RoadDetectionService: ObservableObject {
     private nonisolated(unsafe) var visionModel: VNCoreMLModel?
     private nonisolated(unsafe) var detectionRequest: VNCoreMLRequest?
 
-    /// Rear camera + portrait rotation (90°) without mirroring.
-    /// Front driver path uses `.leftMirrored`; rear is not mirrored, so `.right` matches
-    /// the upright portrait buffers produced with `videoRotationAngle = 90`.
-    private nonisolated static let visionOrientation: CGImagePropertyOrientation = .right
+    /// Log unexpected Vision result types once per service instance.
+    private nonisolated(unsafe) var hasLoggedUnexpectedResultType = false
+
+    /// Rolling inference timing (updated only on the processing path).
+    private nonisolated(unsafe) var inferenceTimingCount = 0
+    private nonisolated(unsafe) var inferenceTimingAccumulatedMs: Double = 0
+
+    /// CameraManager already rotates video output by 90° for portrait, and the rear
+    /// camera is not mirrored. The delivered CVPixelBuffer is therefore upright → `.up`.
+    /// (DriverMonitor still uses `.leftMirrored` for the front path — do not change that here.
+    /// MultiCam later may centralize/revisit orientation handling.)
+    private nonisolated static let visionOrientation: CGImagePropertyOrientation = .up
 
     init() {
         loadModel()
@@ -88,24 +99,27 @@ final class RoadDetectionService: ObservableObject {
         }
     }
 
-    func stop() {
+    /// Stops accepting frames and shuts down the rear camera.
+    /// Completion runs on the main queue after the AVCaptureSession has actually stopped.
+    /// Does not force-clear `isProcessingFrame` — in-flight inference clears it via `defer`.
+    func stop(completion: (() -> Void)? = nil) {
         cameraManager.onFrame = nil
-        cameraManager.stop()
         isRunning = false
         detections = []
         if isModelReady {
             state = .clear
         }
-        processingLock.lock()
-        isProcessingFrame = false
-        processingLock.unlock()
-        print("[RoadDetector] Rear camera stopped.")
+        print("[RoadDetector] Stopping rear camera…")
+        cameraManager.stop { [weak self] in
+            print("[RoadDetector] Rear camera stopped.")
+            completion?()
+            _ = self
+        }
     }
 
     // MARK: - Model loading
 
     /// Loads the bundled `RoadObjectDetector` Core ML model once.
-    /// Prefers the Xcode-generated wrapper, then compiled `.mlmodelc` in the app bundle.
     private func loadModel() {
         do {
             let mlModel = try Self.makeMLModel()
@@ -135,7 +149,6 @@ final class RoadDetectionService: ObservableObject {
         config.computeUnits = .all
 
         // Xcode compiles DriveSensAI/ML/RoadObjectDetector.mlpackage → RoadObjectDetector.mlmodelc in the app bundle.
-        // Load by URL only (avoid the generated MainActor wrapper from a nonisolated context).
         let resourceNames = ["RoadObjectDetector", "yolov8n", "YOLOv8n"]
         for name in resourceNames {
             if let modelURL = Bundle.main.url(forResource: name, withExtension: "mlmodelc")
@@ -209,6 +222,7 @@ final class RoadDetectionService: ObservableObject {
 
         guard let request = detectionRequest else {
             Task { @MainActor in
+                guard self.isRunning else { return }
                 self.state = .modelUnavailable
                 self.detections = []
             }
@@ -222,9 +236,22 @@ final class RoadDetectionService: ObservableObject {
         )
 
         do {
+            let start = CFAbsoluteTimeGetCurrent()
             try handler.perform([request])
-            let observations = (request.results as? [VNRecognizedObjectObservation]) ?? []
-            let filtered = Self.parseDetections(from: observations)
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - start) * 1000.0
+            recordInferenceTiming(elapsedMs: elapsedMs)
+
+            let filtered: [RoadDetection]
+            if let observations = request.results as? [VNRecognizedObjectObservation] {
+                filtered = Self.parseDetections(from: observations)
+            } else if let results = request.results, !results.isEmpty {
+                // Non-empty but not VNRecognizedObjectObservation — incompatible model output.
+                logUnexpectedResultTypesIfNeeded(results)
+                filtered = []
+            } else {
+                // nil/empty results: treat as no detections (distinct from wrong type).
+                filtered = []
+            }
 
             Task { @MainActor in
                 self.publish(detections: filtered)
@@ -232,11 +259,44 @@ final class RoadDetectionService: ObservableObject {
         } catch {
             print("[RoadDetector] Vision inference failed: \(error.localizedDescription)")
             Task { @MainActor in
+                guard self.isRunning else { return }
                 if self.detections.isEmpty {
                     self.state = .clear
                 }
             }
         }
+    }
+
+    nonisolated private func recordInferenceTiming(elapsedMs: Double) {
+        processingLock.lock()
+        inferenceTimingAccumulatedMs += elapsedMs
+        inferenceTimingCount += 1
+        let count = inferenceTimingCount
+        let total = inferenceTimingAccumulatedMs
+        if count >= Self.inferenceTimingSampleCount {
+            inferenceTimingCount = 0
+            inferenceTimingAccumulatedMs = 0
+            processingLock.unlock()
+            let average = total / Double(Self.inferenceTimingSampleCount)
+            print(String(format: "[RoadDetector] Avg inference (%d): %.1f ms", Self.inferenceTimingSampleCount, average))
+        } else {
+            processingLock.unlock()
+        }
+    }
+
+    nonisolated private func logUnexpectedResultTypesIfNeeded(_ results: [Any]) {
+        processingLock.lock()
+        let alreadyLogged = hasLoggedUnexpectedResultType
+        if !alreadyLogged {
+            hasLoggedUnexpectedResultType = true
+        }
+        processingLock.unlock()
+
+        guard !alreadyLogged else { return }
+
+        let typeNames = results.map { String(describing: type(of: $0)) }
+        let unique = Array(Set(typeNames)).sorted()
+        print("[RoadDetector] Unexpected Vision result type: \(unique.joined(separator: ", "))")
     }
 
     nonisolated private static func parseDetections(
@@ -247,7 +307,8 @@ final class RoadDetectionService: ObservableObject {
         for observation in observations {
             guard let top = observation.labels.first else { continue }
             let label = top.identifier.lowercased()
-            let confidence = top.confidence
+            // Combined objectness × class confidence.
+            let confidence = observation.confidence * top.confidence
 
             guard relevantLabels.contains(label) else { continue }
             guard confidence >= confidenceThreshold else { continue }
@@ -266,6 +327,9 @@ final class RoadDetectionService: ObservableObject {
     }
 
     private func publish(detections: [RoadDetection]) {
+        // Ignore stale inference that finishes after stop().
+        guard isRunning else { return }
+
         self.detections = detections
 
         if !isModelReady {

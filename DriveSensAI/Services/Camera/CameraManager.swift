@@ -86,10 +86,24 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
         }
     }
 
-    func stop() {
+    /// Stops the capture session on `sessionQueue`. Completion runs on the main queue
+    /// only after `stopRunning()` has returned (or immediately if already stopped).
+    func stop(completion: (() -> Void)? = nil) {
         sessionQueue.async { [weak self] in
-            guard let self, self.session.isRunning else { return }
-            self.session.stopRunning()
+            guard let self else {
+                if let completion {
+                    DispatchQueue.main.async(execute: completion)
+                }
+                return
+            }
+
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+
+            if let completion {
+                DispatchQueue.main.async(execute: completion)
+            }
         }
     }
 

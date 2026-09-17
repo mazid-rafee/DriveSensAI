@@ -52,15 +52,15 @@ final class DriverMonitor: ObservableObject {
         }
     }
 
-    func stop() {
+    /// Stops accepting frames and shuts down the front camera.
+    /// Completion runs on the main queue after the AVCaptureSession has actually stopped.
+    /// Does not force-clear `isProcessingFrame` — in-flight Vision work clears it via `defer`.
+    func stop(completion: (() -> Void)? = nil) {
         cameraManager.onFrame = nil
-        cameraManager.stop()
         isRunning = false
         lookingAwayStartedAt = nil
         attentionState = .noFace
-        processingLock.lock()
-        isProcessingFrame = false
-        processingLock.unlock()
+        cameraManager.stop(completion: completion)
     }
 
     // MARK: - Frame intake
@@ -105,6 +105,7 @@ final class DriverMonitor: ObservableObject {
             }
         } catch {
             Task { @MainActor in
+                guard self.isRunning else { return }
                 self.lookingAwayStartedAt = nil
                 self.attentionState = .noFace
             }
@@ -132,6 +133,9 @@ final class DriverMonitor: ObservableObject {
     }
 
     private func applyTemporalLogic(instantState: DriverAttentionState) {
+        // Ignore stale Vision results that finish after stop().
+        guard isRunning else { return }
+
         switch instantState {
         case .noFace:
             lookingAwayStartedAt = nil

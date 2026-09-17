@@ -8,6 +8,7 @@ import SwiftUI
 struct DriveView: View {
     @StateObject private var driverMonitor = DriverMonitor()
     @State private var showRoadDebug = false
+    @State private var isHandingOffToRoad = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -28,7 +29,7 @@ struct DriveView: View {
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
-            } else if !driverMonitor.isRunning {
+            } else if !driverMonitor.isRunning && !isHandingOffToRoad && !showRoadDebug {
                 Text("Starting camera…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -36,12 +37,17 @@ struct DriveView: View {
 
             Spacer()
 
-            // Temporary Milestone 2 entry point — stops front camera before rear starts.
+            // Temporary Milestone 2 entry point — present only after front session has stopped.
             Button("Test Road Detection") {
-                driverMonitor.stop()
-                showRoadDebug = true
+                guard !isHandingOffToRoad, !showRoadDebug else { return }
+                isHandingOffToRoad = true
+                driverMonitor.stop {
+                    showRoadDebug = true
+                    isHandingOffToRoad = false
+                }
             }
             .buttonStyle(.bordered)
+            .disabled(isHandingOffToRoad || showRoadDebug)
             .padding(.bottom, 8)
         }
         .padding()
@@ -49,7 +55,7 @@ struct DriveView: View {
         .background(Color(.systemBackground))
         .onAppear {
             // Restore front camera when returning from road debug (or first launch).
-            if !showRoadDebug {
+            if !showRoadDebug && !isHandingOffToRoad {
                 driverMonitor.start()
             }
         }
@@ -60,6 +66,7 @@ struct DriveView: View {
             }
         }
         .fullScreenCover(isPresented: $showRoadDebug, onDismiss: {
+            // Rear session is already stopped by RoadDebugView before dismiss.
             driverMonitor.start()
         }) {
             RoadDebugView()
