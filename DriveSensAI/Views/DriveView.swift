@@ -18,28 +18,19 @@ struct DriveView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            VStack(spacing: 16) {
+            VStack(spacing: 10) {
                 topBar
 
-                // Future MapKit swap point — keep this region intact.
-                NavigationPlaceholderView()
-                    .frame(maxHeight: .infinity)
-                    .layoutPriority(1)
+                // Fills remaining space; lower chrome is fixed-height so the map does not resize.
+                NavigationView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                if let banner = warningBanner {
-                    WarningBannerView(title: banner.title, style: banner.style)
-                        .transition(.opacity)
-                }
-
-                speedInstrument
-
-                bottomStatusPanel
-
-                onDeviceFooter
+                lowerControls
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
         }
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: driverMonitor.attentionState)
@@ -60,6 +51,26 @@ struct DriveView: View {
             if !ready {
                 roadRiskAnalyzer.reset()
             }
+        }
+    }
+
+    /// Compact chrome under the map. Banner slot is always reserved so NavigationView height stays stable.
+    private var lowerControls: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                if let banner = warningBanner {
+                    WarningBannerView(title: banner.title, style: banner.style)
+                        .transition(.opacity)
+                }
+            }
+            .frame(height: 40)
+            .clipped()
+
+            speedInstrument
+
+            bottomStatusPanel
+
+            onDeviceFooter
         }
     }
 
@@ -93,21 +104,20 @@ struct DriveView: View {
     // MARK: - Speed (placeholder — no Core Location yet)
 
     private var speedInstrument: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 1) {
             Text("--")
-                .font(.system(size: 72, weight: .semibold, design: .rounded))
+                .font(.system(size: 44, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
 
             Text("MPH")
-                .font(.subheadline.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .tracking(1.2)
                 .foregroundStyle(.secondary)
 
             Text("SPEED LIMIT --")
-                .font(.caption.weight(.medium))
+                .font(.caption2.weight(.medium))
                 .foregroundStyle(.tertiary)
-                .padding(.top, 6)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
@@ -117,7 +127,7 @@ struct DriveView: View {
     // MARK: - Bottom status
 
     private var bottomStatusPanel: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             StatusItemView(
                 title: "DRIVER",
                 value: driverDisplayText,
@@ -133,15 +143,14 @@ struct DriveView: View {
     }
 
     private var onDeviceFooter: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             Image(systemName: "lock.fill")
                 .font(.caption2)
             Text("On-device AI")
-                .font(.caption.weight(.medium))
+                .font(.caption2.weight(.medium))
         }
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity)
-        .padding(.top, 4)
     }
 
     // MARK: - Display mapping (UI only)

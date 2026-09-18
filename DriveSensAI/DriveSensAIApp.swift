@@ -1,14 +1,10 @@
-//
-//  DriveSensAIApp.swift
-//  DriveSensAI
-//
-//  Created by Md Abdullah Al Mazid on 9/17/26.
-//
-
 import SwiftUI
 
 @main
 struct DriveSensAIApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self)
+    private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             DriveView()

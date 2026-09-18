@@ -18,28 +18,29 @@ struct StatusItemView: View {
     let tone: Tone
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .tracking(0.8)
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Circle()
                     .fill(dotColor)
-                    .frame(width: 8, height: 8)
+                    .frame(width: 7, height: 7)
 
                 Text(value)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(valueColor)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.white.opacity(0.06))
         )
     }

@@ -16,20 +16,22 @@ struct WarningBannerView: View {
     let style: Style
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Image(systemName: iconName)
-                .font(.title3.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
 
             Text(title)
-                .font(.headline.weight(.bold))
-                .tracking(0.6)
+                .font(.subheadline.weight(.bold))
+                .tracking(0.4)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
         }
         .foregroundStyle(foreground)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
-        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(background)
         )
         .accessibilityAddTraits(.isHeader)
@@ -68,6 +70,7 @@ struct WarningBannerView: View {
 #Preview {
     VStack(spacing: 12) {
         WarningBannerView(title: "WATCH THE ROAD", style: .urgent)
+        WarningBannerView(title: "VEHICLE CLOSING", style: .critical)
         WarningBannerView(title: "Driver not detected", style: .caution)
     }
     .padding()

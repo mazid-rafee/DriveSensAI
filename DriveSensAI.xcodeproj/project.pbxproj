@@ -6,8 +6,17 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		ECC83378305CEA2700B89690 /* GoogleMaps in Frameworks */ = {isa = PBXBuildFile; productRef = ECC83377305CEA2700B89690 /* GoogleMaps */; };
+		ECC833CF305CEF3B00B89690 /* GooglePlaces in Frameworks */ = {isa = PBXBuildFile; productRef = ECC833CE305CEF3B00B89690 /* GooglePlaces */; };
+		ECC833D1305CEF3B00B89690 /* GooglePlacesSwift in Frameworks */ = {isa = PBXBuildFile; productRef = ECC833D0305CEF3B00B89690 /* GooglePlacesSwift */; };
+		ECC833DE305CF6DF00B89690 /* GoogleNavigation in Frameworks */ = {isa = PBXBuildFile; productRef = ECC833DD305CF6DF00B89690 /* GoogleNavigation */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		B3403C05305C7EC200801EB8 /* DriveSensAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DriveSensAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		ECC833E0305CF80000B89690 /* DriveSensAI.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = DriveSensAI.xcconfig; sourceTree = "<group>"; };
+		ECC833E1305CF90000B89690 /* InfoPlistAdditions.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = InfoPlistAdditions.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -23,6 +32,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				ECC83378305CEA2700B89690 /* GoogleMaps in Frameworks */,
+				ECC833DE305CF6DF00B89690 /* GoogleNavigation in Frameworks */,
+				ECC833CF305CEF3B00B89690 /* GooglePlaces in Frameworks */,
+				ECC833D1305CEF3B00B89690 /* GooglePlacesSwift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -32,7 +45,10 @@
 		B3403BFC305C7EC200801EB8 = {
 			isa = PBXGroup;
 			children = (
+				ECC833E0305CF80000B89690 /* DriveSensAI.xcconfig */,
+				ECC833E1305CF90000B89690 /* InfoPlistAdditions.plist */,
 				B3403C07305C7EC200801EB8 /* DriveSensAI */,
+				ECC833D2305CEFFA00B89690 /* Frameworks */,
 				B3403C06305C7EC200801EB8 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,6 +59,13 @@
 				B3403C05305C7EC200801EB8 /* DriveSensAI.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		ECC833D2305CEFFA00B89690 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -65,6 +88,10 @@
 			);
 			name = DriveSensAI;
 			packageProductDependencies = (
+				ECC83377305CEA2700B89690 /* GoogleMaps */,
+				ECC833CE305CEF3B00B89690 /* GooglePlaces */,
+				ECC833D0305CEF3B00B89690 /* GooglePlacesSwift */,
+				ECC833DD305CF6DF00B89690 /* GoogleNavigation */,
 			);
 			productName = DriveSensAI;
 			productReference = B3403C05305C7EC200801EB8 /* DriveSensAI.app */;
@@ -94,6 +121,11 @@
 			);
 			mainGroup = B3403BFC305C7EC200801EB8;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				ECC83376305CEA2700B89690 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */,
+				ECC833CD305CEF3B00B89690 /* XCRemoteSwiftPackageReference "ios-places-sdk" */,
+				ECC833DC305CF6DF00B89690 /* XCRemoteSwiftPackageReference "ios-navigation-sdk" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B3403C06305C7EC200801EB8 /* Products */;
 			projectDirPath = "";
@@ -246,17 +278,24 @@
 		};
 		B3403C11305C7EC400801EB8 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = ECC833E0305CF80000B89690 /* DriveSensAI.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 7HZBY2NLD7;
+				DEVELOPMENT_TEAM = TA74DA3FW3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
+				INFOPLIST_FILE = InfoPlistAdditions.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DriveSensAI uses the front camera to monitor driver attention while you drive.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "DriveSensAI uses your location for turn-by-turn navigation guidance while you drive.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "DriveSensAI uses your location to show your position on the navigation map while you drive.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "DriveSensAI uses motion data to improve navigation accuracy while you drive.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = location;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -265,7 +304,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mazid.DriveSensAI;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zaimazarnaz.drivesensai;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -279,17 +318,24 @@
 		};
 		B3403C12305C7EC400801EB8 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = ECC833E0305CF80000B89690 /* DriveSensAI.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 7HZBY2NLD7;
+				DEVELOPMENT_TEAM = TA74DA3FW3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
+				INFOPLIST_FILE = InfoPlistAdditions.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DriveSensAI uses the front camera to monitor driver attention while you drive.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "DriveSensAI uses your location for turn-by-turn navigation guidance while you drive.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "DriveSensAI uses your location to show your position on the navigation map while you drive.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "DriveSensAI uses motion data to improve navigation accuracy while you drive.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = location;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -298,7 +344,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mazid.DriveSensAI;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zaimazarnaz.drivesensai;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -332,6 +378,56 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		ECC83376305CEA2700B89690 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/googlemaps/ios-maps-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.1.0;
+			};
+		};
+		ECC833CD305CEF3B00B89690 /* XCRemoteSwiftPackageReference "ios-places-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/googlemaps/ios-places-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.1.0;
+			};
+		};
+		ECC833DC305CF6DF00B89690 /* XCRemoteSwiftPackageReference "ios-navigation-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/googlemaps/ios-navigation-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		ECC83377305CEA2700B89690 /* GoogleMaps */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ECC83376305CEA2700B89690 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */;
+			productName = GoogleMaps;
+		};
+		ECC833CE305CEF3B00B89690 /* GooglePlaces */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ECC833CD305CEF3B00B89690 /* XCRemoteSwiftPackageReference "ios-places-sdk" */;
+			productName = GooglePlaces;
+		};
+		ECC833D0305CEF3B00B89690 /* GooglePlacesSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ECC833CD305CEF3B00B89690 /* XCRemoteSwiftPackageReference "ios-places-sdk" */;
+			productName = GooglePlacesSwift;
+		};
+		ECC833DD305CF6DF00B89690 /* GoogleNavigation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ECC833DC305CF6DF00B89690 /* XCRemoteSwiftPackageReference "ios-navigation-sdk" */;
+			productName = GoogleNavigation;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B3403BFD305C7EC200801EB8 /* Project object */;
 }

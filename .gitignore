@@ -1,3 +1,6 @@
+# Local API secrets (keep Secrets.example.xcconfig tracked)
+Secrets.xcconfig
+
 # Xcode / macOS
 DerivedData/
 build/
