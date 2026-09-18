@@ -9,6 +9,7 @@ import SwiftUI
 struct DriveView: View {
     @StateObject private var driverMonitor = DriverMonitor()
     @StateObject private var roadDetector = RoadDetectionService()
+    @StateObject private var roadRiskAnalyzer = RoadRiskAnalyzer()
 
     /// Stable owner for the non-Observable MultiCamManager + published UI status.
     @StateObject private var multiCamOwner = MultiCamSessionOwner()
@@ -42,11 +43,23 @@ struct DriveView: View {
         }
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: driverMonitor.attentionState)
+        .animation(.easeInOut(duration: 0.2), value: roadRiskAnalyzer.state)
         .onAppear {
             startMultiCamIfNeeded()
         }
         .onDisappear {
             stopMultiCam()
+        }
+        .onReceive(roadDetector.$detections) { detections in
+            roadRiskAnalyzer.update(
+                detections: detections,
+                timestamp: ProcessInfo.processInfo.systemUptime
+            )
+        }
+        .onChange(of: roadDetector.isModelReady) { _, ready in
+            if !ready {
+                roadRiskAnalyzer.reset()
+            }
         }
     }
 
@@ -159,21 +172,41 @@ struct DriveView: View {
         if !roadDetector.isModelReady || roadDetector.state == .modelUnavailable {
             return "Road monitoring unavailable"
         }
-        if roadDetector.detections.isEmpty {
-            return "Monitoring"
+
+        // Experimental forward closing-risk estimation (not validated FCW).
+        switch roadRiskAnalyzer.state {
+        case .clear:
+            return "Clear"
+        case .monitoring:
+            return "Vehicle ahead"
+        case .caution:
+            return "Closing vehicle"
+        case .high:
+            return "Rapid closing"
         }
-        let count = roadDetector.detections.count
-        return count == 1 ? "1 object detected" : "\(count) objects detected"
     }
 
     private var roadTone: StatusItemView.Tone {
         if !roadDetector.isModelReady || roadDetector.state == .modelUnavailable {
             return .caution
         }
-        return .normal
+        switch roadRiskAnalyzer.state {
+        case .clear, .monitoring:
+            return .normal
+        case .caution:
+            return .caution
+        case .high:
+            return .urgent
+        }
     }
 
+    /// Priority: HIGH road risk > looking away > no face.
     private var warningBanner: (title: String, style: WarningBannerView.Style)? {
+        if roadDetector.isModelReady,
+           roadRiskAnalyzer.state == .high {
+            return ("VEHICLE CLOSING", .critical)
+        }
+
         switch driverMonitor.attentionState {
         case .lookingAway:
             return ("WATCH THE ROAD", .urgent)
@@ -213,6 +246,7 @@ struct DriveView: View {
                 multiCamOwner.errorMessage = error.localizedDescription
                 driverMonitor.endExternalFrameProcessing()
                 roadDetector.endExternalFrameProcessing()
+                roadRiskAnalyzer.reset()
                 // Allow a later onAppear retry after a failed start.
                 multiCamOwner.hasStarted = false
             }
@@ -226,6 +260,7 @@ struct DriveView: View {
         multiCamOwner.manager.onRearFrame = nil
         driverMonitor.endExternalFrameProcessing()
         roadDetector.endExternalFrameProcessing()
+        roadRiskAnalyzer.reset()
 
         multiCamOwner.manager.stop {
             multiCamOwner.isActive = false
