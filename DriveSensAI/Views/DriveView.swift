@@ -32,6 +32,8 @@ struct DriveView: View {
             .padding(.top, 6)
             .padding(.bottom, 8)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: driverMonitor.attentionState)
         .animation(.easeInOut(duration: 0.2), value: roadRiskAnalyzer.state)

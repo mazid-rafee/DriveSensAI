@@ -5,9 +5,35 @@
 
 import SwiftUI
 import CoreLocation
+import Foundation
 import GoogleMaps
 import GoogleNavigation
 import UIKit
+
+/// Compact guidance payload published from the Navigation SDK for custom SwiftUI chrome.
+private struct NavigationDisplayInfo: Equatable {
+    var remainingTimeText: String
+    var remainingDistanceText: String
+    var instructionText: String
+    var roadName: String
+    var maneuverImage: UIImage?
+
+    static let empty = NavigationDisplayInfo(
+        remainingTimeText: "",
+        remainingDistanceText: "",
+        instructionText: "",
+        roadName: "",
+        maneuverImage: nil
+    )
+
+    static func == (lhs: NavigationDisplayInfo, rhs: NavigationDisplayInfo) -> Bool {
+        lhs.remainingTimeText == rhs.remainingTimeText
+            && lhs.remainingDistanceText == rhs.remainingDistanceText
+            && lhs.instructionText == rhs.instructionText
+            && lhs.roadName == rhs.roadName
+            && lhs.maneuverImage === rhs.maneuverImage
+    }
+}
 
 /// Navigation region backed by Google Maps / Navigation SDK.
 struct NavigationView: View {
@@ -19,6 +45,9 @@ struct NavigationView: View {
 
     @State private var isFetchingPlaceDetails = false
     @State private var pendingCurrentLocationSelection = false
+    @State private var navigationDisplayInfo = NavigationDisplayInfo.empty
+    @State private var navigationCameraToggleRequestID: UUID?
+    @State private var navigationMyLocationRequestID: UUID?
 
     @FocusState private var focusedField: DirectionsSearchField?
 
@@ -40,12 +69,22 @@ struct NavigationView: View {
                 colorScheme: colorScheme,
                 navigationStartRequestID: session.navigationStartRequestID,
                 navigationEndRequestID: session.navigationEndRequestID,
-                debugSimulateAlongRoute: debugSimulateFlag,
+                navigationCameraToggleRequestID: navigationCameraToggleRequestID,
+                navigationMyLocationRequestID: navigationMyLocationRequestID,
                 onTermsRejected: { session.handleTermsRejected() },
                 onNavigationFailed: { session.handleNavigationStartupFailed($0) },
-                onNavigationStarted: { session.handleNavigationStartupSucceeded() },
+                onNavigationStarted: { 
+                    print("[NAV 3] SwiftUI received navigation started")
+                    session.handleNavigationStartupSucceeded() 
+                },
                 onNavigationEnded: { session.handleNavigationEnded() },
-                onArrived: { session.handleArrivedAtDestination() }
+                onArrived: { session.handleArrivedAtDestination() },
+                onNavigationInfoUpdated: { info in
+                    navigationDisplayInfo = info
+                },
+                onNavigationInfoCleared: {
+                    navigationDisplayInfo = .empty
+                }
             )
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
@@ -68,10 +107,37 @@ struct NavigationView: View {
                     .zIndex(2)
             }
 
-            bottomControls
-                .zIndex(3)
+            if session.mode == .navigation {
+                VStack(alignment: .trailing, spacing: 8) {
+                    navigationManeuverBar
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                            .allowsHitTesting(false)
+
+                        VStack(spacing: 8) {
+                            navigationCameraButton
+                            myLocationButton
+                        }
+                    }
+                }
+                .padding(.top, 12)
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .zIndex(10)
+            }
+
+            VStack {
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+                bottomControlsBar
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .zIndex(3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .onChange(of: focusedField) { _, newValue in
             guard session.mode != .navigation else { return }
             guard let newValue else {
@@ -96,14 +162,6 @@ struct NavigationView: View {
         .onAppear {
             userLocation.refreshCachedLocation()
         }
-    }
-
-    private var debugSimulateFlag: Bool {
-        #if DEBUG
-        session.debugSimulateAlongRoute
-        #else
-        false
-        #endif
     }
 
     // MARK: - Overlays
@@ -192,15 +250,6 @@ struct NavigationView: View {
                             .fill(Color(.systemBackground).opacity(0.95))
                     }
             }
-
-            #if DEBUG
-            if session.mode == .showRoute {
-                Toggle("DEBUG: Simulate along route", isOn: $session.debugSimulateAlongRoute)
-                    .font(.caption2)
-                    .padding(.horizontal, 4)
-                    .tint(.orange)
-            }
-            #endif
         }
         .padding(.horizontal, 12)
         .padding(.top, 12)
@@ -241,23 +290,30 @@ struct NavigationView: View {
         }
     }
 
-    private var bottomControls: some View {
-        VStack {
-            Spacer()
-            HStack {
-                if session.mode == .navigation {
-                    endNavigationButton
-                } else if session.isGOVisible {
-                    goButton
-                }
-                Spacer()
+    @ViewBuilder
+    private var bottomControlsBar: some View {
+        if session.mode == .navigation {
+            HStack(spacing: 8) {
+                endNavigationButton
+                tripSummaryBar
+                    .frame(maxWidth: .infinity)
             }
+            .frame(maxWidth: .infinity)
             .padding(.leading, 12)
+            .padding(.trailing, 12)
             .padding(.bottom, 12)
             .safeAreaPadding(.bottom, 0)
+        } else if session.isGOVisible {
+            HStack(alignment: .bottom) {
+                goButton
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+                myLocationButton
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+            .safeAreaPadding(.bottom, 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .allowsHitTesting(true)
     }
 
     private var goButton: some View {
@@ -297,12 +353,182 @@ struct NavigationView: View {
                 .font(.headline.weight(.bold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 18)
-                .padding(.vertical, 12)
+                .frame(height: 48)
                 .background(Color.red, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("End navigation")
+    }
+
+    private var tripSummaryBar: some View {
+        HStack(spacing: 10) {
+            Spacer(minLength: 0)
+
+            Text(tripSummaryTimeText)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.green)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.28))
+                .frame(width: 1, height: 18)
+
+            Text(tripSummaryDistanceText)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.92))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 48)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.black.opacity(0.92))
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(tripSummaryTimeText) remaining, \(tripSummaryDistanceText) remaining")
+    }
+
+    private var navigationManeuverBar: some View {
+        HStack(spacing: 10) {
+            if let image = navigationDisplayInfo.maneuverImage {
+                Image(uiImage: image)
+                    .renderingMode(.template)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(.white)
+            } else {
+                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(maneuverPrimaryText)
+                    .font(.system(size: 16.5, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .minimumScaleFactor(0.75)
+
+                if let secondary = maneuverSecondaryText {
+                    Text(secondary)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .minimumScaleFactor(0.75)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, minHeight: 58, maxHeight: 64, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(red: 0.07, green: 0.42, blue: 0.38))
+                .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(maneuverAccessibilityLabel)
+    }
+
+    private var navigationCameraButton: some View {
+        Button {
+            print("[MAP CONTROL] Recenter tapped")
+            navigationCameraToggleRequestID = UUID()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color(white: 0.12).opacity(0.94))
+                    .shadow(color: .black.opacity(0.28), radius: 6, y: 3)
+
+                Image(systemName: "location.north.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 20, height: 20)
+
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 5, height: 5)
+                    .offset(y: -11)
+            }
+            .frame(width: 48, height: 48)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: 48, height: 48)
+        .contentShape(Circle())
+        .allowsHitTesting(true)
+        .accessibilityLabel("Change navigation camera")
+        .accessibilityHint("Recenters the navigation camera on your route")
+    }
+
+    private var myLocationButton: some View {
+        Button {
+            print("[MAP CONTROL] My Location tapped")
+            navigationMyLocationRequestID = UUID()
+        } label: {
+            Image(systemName: "scope")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Color(white: 0.35))
+                .frame(width: 44, height: 44)
+                .background(Color.white)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: 44, height: 44)
+        .contentShape(Circle())
+        .allowsHitTesting(true)
+        .accessibilityLabel("My location")
+        .accessibilityHint("Centers the map on your current location")
+    }
+
+    private var tripSummaryTimeText: String {
+        let text = navigationDisplayInfo.remainingTimeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "-- min" : text
+    }
+
+    private var tripSummaryDistanceText: String {
+        let text = navigationDisplayInfo.remainingDistanceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "-- mi" : text
+    }
+
+    private var maneuverPrimaryText: String {
+        let instruction = navigationDisplayInfo.instructionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !instruction.isEmpty { return instruction }
+
+        let road = navigationDisplayInfo.roadName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !road.isEmpty { return road }
+
+        return "Starting guidance…"
+    }
+
+    private var maneuverSecondaryText: String? {
+        let instruction = navigationDisplayInfo.instructionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let road = navigationDisplayInfo.roadName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !road.isEmpty else { return nil }
+        guard !instruction.isEmpty else { return nil }
+        // Only show road as secondary when it adds distinct information.
+        guard !instruction.localizedCaseInsensitiveContains(road) else { return nil }
+        return road
+    }
+
+    private var maneuverAccessibilityLabel: String {
+        if let secondary = maneuverSecondaryText {
+            return "\(maneuverPrimaryText), \(secondary)"
+        }
+        return maneuverPrimaryText
     }
 
     // MARK: - Places selection
@@ -377,13 +603,16 @@ private struct GoogleMapView: UIViewRepresentable {
     var colorScheme: ColorScheme
     var navigationStartRequestID: UUID?
     var navigationEndRequestID: UUID?
-    var debugSimulateAlongRoute: Bool
+    var navigationCameraToggleRequestID: UUID?
+    var navigationMyLocationRequestID: UUID?
 
     var onTermsRejected: () -> Void
     var onNavigationFailed: (String) -> Void
     var onNavigationStarted: () -> Void
     var onNavigationEnded: () -> Void
     var onArrived: () -> Void
+    var onNavigationInfoUpdated: (NavigationDisplayInfo) -> Void
+    var onNavigationInfoCleared: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -402,8 +631,11 @@ private struct GoogleMapView: UIViewRepresentable {
         }
 
         let mapView = GMSMapView(options: options)
-        mapView.settings.myLocationButton = true
-        mapView.settings.compassButton = true
+        mapView.isMyLocationEnabled = true
+        mapView.settings.myLocationButton = false
+        mapView.settings.compassButton = false
+        mapView.settings.isRecenterButtonEnabled = false
+        mapView.settings.isNavigationReportIncidentButtonEnabled = false
         mapView.settings.zoomGestures = true
         mapView.settings.scrollGestures = true
         mapView.settings.rotateGestures = true
@@ -427,13 +659,15 @@ private struct GoogleMapView: UIViewRepresentable {
         coordinator.previewRoute = previewRoute
         coordinator.mode = mode
         coordinator.colorScheme = colorScheme
-        coordinator.debugSimulateAlongRoute = debugSimulateAlongRoute
         coordinator.applyInterfaceStyle(colorScheme, navigationEnabled: mapView.isNavigationEnabled)
+        // Apply padding before route fitting so camera fit uses the final layout insets.
+        coordinator.applyModePresentation(mode)
         coordinator.updateMarkers(source: source, destination: destination, mode: mode, previewRoute: previewRoute)
         coordinator.updatePreviewPolyline(previewRoute, mode: mode)
         coordinator.handleNavigationStartIfNeeded(navigationStartRequestID)
         coordinator.handleNavigationEndIfNeeded(navigationEndRequestID)
-        coordinator.applyModePresentation(mode)
+        coordinator.handleCameraToggleIfNeeded(navigationCameraToggleRequestID)
+        coordinator.handleMyLocationIfNeeded(navigationMyLocationRequestID)
     }
 
     final class Coordinator: NSObject, CLLocationManagerDelegate, GMSNavigatorListener {
@@ -442,13 +676,14 @@ private struct GoogleMapView: UIViewRepresentable {
         var previewRoute: ComputedRoute?
         var mode: NavigationMode = .chooseLocation
         var colorScheme: ColorScheme = .dark
-        var debugSimulateAlongRoute = false
 
         var onTermsRejected: () -> Void = {}
         var onNavigationFailed: (String) -> Void = { _ in }
         var onNavigationStarted: () -> Void = {}
         var onNavigationEnded: () -> Void = {}
         var onArrived: () -> Void = {}
+        var onNavigationInfoUpdated: (NavigationDisplayInfo) -> Void = { _ in }
+        var onNavigationInfoCleared: () -> Void = {}
 
         private let locationManager = CLLocationManager()
         private weak var mapView: GMSMapView?
@@ -462,8 +697,19 @@ private struct GoogleMapView: UIViewRepresentable {
         private var lastDestinationPlaceID: String?
         private var handledStartID: UUID?
         private var handledEndID: UUID?
+        private var handledCameraToggleRequestID: UUID?
+        private var handledMyLocationRequestID: UUID?
         private var isStarting = false
         private var didRegisterNavigatorListener = false
+        private var lastPublishedDisplayInfo = NavigationDisplayInfo.empty
+        private let distanceFormatter: MeasurementFormatter = {
+            let formatter = MeasurementFormatter()
+            formatter.unitStyle = .short
+            formatter.locale = .current
+            formatter.numberFormatter.maximumFractionDigits = 1
+            formatter.numberFormatter.minimumFractionDigits = 0
+            return formatter
+        }()
 
         var lastKnownCoordinate: CLLocationCoordinate2D? {
             locationManager.location?.coordinate
@@ -481,6 +727,8 @@ private struct GoogleMapView: UIViewRepresentable {
             onNavigationStarted = parent.onNavigationStarted
             onNavigationEnded = parent.onNavigationEnded
             onArrived = parent.onArrived
+            onNavigationInfoUpdated = parent.onNavigationInfoUpdated
+            onNavigationInfoCleared = parent.onNavigationInfoCleared
         }
 
         func attach(to mapView: GMSMapView) {
@@ -499,16 +747,40 @@ private struct GoogleMapView: UIViewRepresentable {
 
         func applyModePresentation(_ mode: NavigationMode) {
             guard let mapView else { return }
+            mapView.isMyLocationEnabled = true
+            // Always use the custom SwiftUI My Location control.
+            mapView.settings.myLocationButton = false
+            mapView.settings.compassButton = false
+            mapView.settings.isRecenterButtonEnabled = false
+            mapView.settings.isNavigationReportIncidentButtonEnabled = false
+
             if mode == .navigation {
-                mapView.padding = UIEdgeInsets(top: 24, left: 12, bottom: 96, right: 12)
+                // Leave room above End + full-width trip summary so Google attribution stays visible.
+                mapView.padding = UIEdgeInsets(top: 72, left: 12, bottom: 80, right: 12)
+                mapView.settings.isNavigationHeaderEnabled = false
+                mapView.settings.isNavigationFooterEnabled = false
                 previewPolyline?.map = nil
             } else {
-                // Keep location button on the same horizontal line as the GO button.
-                mapView.padding = UIEdgeInsets(top: 150, left: 72, bottom: 12, right: 12)
+                // Symmetric insets for search chrome + GO / My Location row.
+                // Keep modest so route-preview camera fit is not double-padded into a regional zoom.
+                mapView.padding = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
                 if let previewPolyline {
                     previewPolyline.map = mapView
                 }
             }
+
+            #if DEBUG
+            print("[Navigation UI] mode=\(mode), myLocationButton=\(mapView.settings.myLocationButton)")
+            #endif
+        }
+
+        private func applyDisabledGoogleNavigationControls(on mapView: GMSMapView) {
+            mapView.settings.isNavigationHeaderEnabled = false
+            mapView.settings.isNavigationFooterEnabled = false
+            mapView.settings.isNavigationReportIncidentButtonEnabled = false
+            mapView.settings.isRecenterButtonEnabled = false
+            mapView.settings.compassButton = false
+            mapView.settings.myLocationButton = false
         }
 
         func updateMarkers(
@@ -554,12 +826,13 @@ private struct GoogleMapView: UIViewRepresentable {
                 lastFittedPairKey = nil
             }
 
-            if mode != .navigation, source != nil, destination != nil {
+            // Only refit for endpoint changes. Route polyline updates own the SHOW ROUTE camera fit.
+            if mode == .showRoute, source != nil, destination != nil, sourceChanged || destinationChanged {
                 fitCameraToRouteOrMarkers(
                     source: source,
                     destination: destination,
                     route: previewRoute,
-                    force: sourceChanged || destinationChanged || previewRoute != nil
+                    force: true
                 )
             }
         }
@@ -586,12 +859,14 @@ private struct GoogleMapView: UIViewRepresentable {
 
             previewPolyline?.map = nil
             guard let path = GMSPath(fromEncodedPath: route.encodedPolyline), path.count() > 0 else {
-                fitCameraToRouteOrMarkers(
-                    source: source,
-                    destination: destination,
-                    route: nil,
-                    force: true
-                )
+                if mode == .showRoute {
+                    fitCameraToRouteOrMarkers(
+                        source: source,
+                        destination: destination,
+                        route: nil,
+                        force: true
+                    )
+                }
                 return
             }
 
@@ -603,13 +878,15 @@ private struct GoogleMapView: UIViewRepresentable {
             polyline.map = mode == .navigation ? nil : mapView
             previewPolyline = polyline
 
-            lastFittedPairKey = nil
-            fitCameraToRouteOrMarkers(
-                source: source,
-                destination: destination,
-                route: route,
-                force: true
-            )
+            if mode == .showRoute {
+                lastFittedPairKey = nil
+                fitCameraToRouteOrMarkers(
+                    source: source,
+                    destination: destination,
+                    route: route,
+                    force: true
+                )
+            }
         }
 
         private func fitCameraToRouteOrMarkers(
@@ -618,26 +895,42 @@ private struct GoogleMapView: UIViewRepresentable {
             route: ComputedRoute?,
             force: Bool
         ) {
-            guard mode != .navigation, let mapView else { return }
+            guard mode == .showRoute, let mapView else { return }
 
-            let edgePadding = UIEdgeInsets(top: 170, left: 56, bottom: 88, right: 56)
+            let insets = UIEdgeInsets(
+                top: 175,
+                left: 24,
+                bottom: 90,
+                right: 24
+            )
 
             if let route,
                let path = GMSPath(fromEncodedPath: route.encodedPolyline),
-               path.count() > 1 {
+               path.count() > 0 {
                 let pairKey = "route:\(route.sourcePlaceID)|\(route.destinationPlaceID)|\(route.encodedPolyline)"
                 if !force, pairKey == lastFittedPairKey { return }
                 lastFittedPairKey = pairKey
 
-                let bounds = GMSCoordinateBounds(path: path)
-                DispatchQueue.main.async { [weak mapView] in
-                    guard let mapView else { return }
-                    mapView.animate(with: GMSCameraUpdate.fit(bounds, with: edgePadding))
+                var routeBounds: GMSCoordinateBounds?
+                for index in 0..<path.count() {
+                    let coordinate = path.coordinate(at: index)
+                    guard CLLocationCoordinate2DIsValid(coordinate) else { continue }
+                    if let existing = routeBounds {
+                        routeBounds = existing.includingCoordinate(coordinate)
+                    } else {
+                        routeBounds = GMSCoordinateBounds(coordinate: coordinate, coordinate: coordinate)
+                    }
                 }
-                return
+
+                if let routeBounds {
+                    animateCameraFit(routeBounds, insets: insets, on: mapView)
+                    return
+                }
             }
 
-            guard let source, let destination else {
+            guard let source, let destination,
+                  CLLocationCoordinate2DIsValid(source.coordinate),
+                  CLLocationCoordinate2DIsValid(destination.coordinate) else {
                 if source == nil || destination == nil {
                     lastFittedPairKey = nil
                 }
@@ -648,16 +941,37 @@ private struct GoogleMapView: UIViewRepresentable {
             if !force, pairKey == lastFittedPairKey { return }
             lastFittedPairKey = pairKey
 
-            var bounds = GMSCoordinateBounds(
+            let bounds = GMSCoordinateBounds(
                 coordinate: source.coordinate,
                 coordinate: destination.coordinate
             )
-            bounds = bounds.includingCoordinate(source.coordinate)
-            bounds = bounds.includingCoordinate(destination.coordinate)
+            animateCameraFit(bounds, insets: insets, on: mapView)
+        }
 
+        private func animateCameraFit(
+            _ bounds: GMSCoordinateBounds,
+            insets: UIEdgeInsets,
+            on mapView: GMSMapView
+        ) {
+            let update = GMSCameraUpdate.fit(bounds, with: insets)
             DispatchQueue.main.async { [weak mapView] in
                 guard let mapView else { return }
-                mapView.animate(with: GMSCameraUpdate.fit(bounds, with: edgePadding))
+                mapView.animate(with: update)
+
+                // Prevent excessive zoom on very short routes while keeping the full path visible.
+                DispatchQueue.main.async { [weak mapView] in
+                    guard let mapView else { return }
+                    let maxZoom: Float = 17.5
+                    if mapView.camera.zoom > maxZoom {
+                        let clamped = GMSCameraPosition(
+                            target: mapView.camera.target,
+                            zoom: maxZoom,
+                            bearing: mapView.camera.bearing,
+                            viewingAngle: mapView.camera.viewingAngle
+                        )
+                        mapView.animate(to: clamped)
+                    }
+                }
             }
         }
 
@@ -674,6 +988,71 @@ private struct GoogleMapView: UIViewRepresentable {
             handledEndID = requestID
             stopNavigation()
             notifyEnded()
+        }
+
+        func handleCameraToggleIfNeeded(_ requestID: UUID?) {
+            guard let requestID, requestID != handledCameraToggleRequestID else { return }
+            handledCameraToggleRequestID = requestID
+
+            let work = { [weak self] in
+                guard let self, let mapView = self.mapView else {
+                    print("[MAP CONTROL] Recenter skipped — map unavailable")
+                    return
+                }
+                guard self.mode == .navigation, mapView.isNavigationEnabled else {
+                    print("[MAP CONTROL] Recenter skipped — navigation inactive")
+                    return
+                }
+
+                // Restore Navigation SDK following / recenter behavior.
+                mapView.cameraMode = .following
+                print("[MAP CONTROL] Recenter applied — cameraMode=following")
+            }
+
+            if Thread.isMainThread {
+                work()
+            } else {
+                DispatchQueue.main.async(execute: work)
+            }
+        }
+
+        func handleMyLocationIfNeeded(_ requestID: UUID?) {
+            guard let requestID, requestID != handledMyLocationRequestID else { return }
+            handledMyLocationRequestID = requestID
+
+            let work = { [weak self] in
+                guard let self, let mapView = self.mapView else {
+                    print("[MAP CONTROL] My Location skipped — map unavailable")
+                    return
+                }
+
+                let coordinate: CLLocationCoordinate2D?
+                if let myLocation = mapView.myLocation?.coordinate,
+                   CLLocationCoordinate2DIsValid(myLocation) {
+                    coordinate = myLocation
+                } else if let managerLocation = self.locationManager.location?.coordinate,
+                          CLLocationCoordinate2DIsValid(managerLocation) {
+                    coordinate = managerLocation
+                } else {
+                    coordinate = nil
+                }
+
+                guard let coordinate else {
+                    print("[MAP CONTROL] My Location skipped — no valid coordinate")
+                    return
+                }
+
+                let zoom = max(mapView.camera.zoom, 16.5)
+                let camera = GMSCameraPosition.camera(withTarget: coordinate, zoom: zoom)
+                mapView.animate(to: camera)
+                print("[MAP CONTROL] My Location applied — zoom=\(zoom)")
+            }
+
+            if Thread.isMainThread {
+                work()
+            } else {
+                DispatchQueue.main.async(execute: work)
+            }
         }
 
         private func beginNavigationFlow() {
@@ -700,8 +1079,7 @@ private struct GoogleMapView: UIViewRepresentable {
         private func enableNavigatorAndSetDestinations(on mapView: GMSMapView) {
             mapView.isNavigationEnabled = true
             mapView.travelMode = .driving
-            mapView.settings.isRecenterButtonEnabled = true
-            mapView.settings.compassButton = true
+            applyDisabledGoogleNavigationControls(on: mapView)
             applyInterfaceStyle(colorScheme, navigationEnabled: true)
 
             guard let navigator = mapView.navigator else {
@@ -749,26 +1127,26 @@ private struct GoogleMapView: UIViewRepresentable {
                 return
             }
 
+            // NavigationView.swift — inside handleRouteStatus
+            print("[NAV 1] routeStatus =", routeStatus.rawValue)
+
+            navigator.isGuidanceActive = true
+            print("[NAV 2] guidanceActive =", navigator.isGuidanceActive)
+
+            notifyStarted()
+
             navigator.isGuidanceActive = true
             navigator.sendsBackgroundNotifications = true
             mapView.cameraMode = .following
+            applyDisabledGoogleNavigationControls(on: mapView)
             applyInterfaceStyle(colorScheme, navigationEnabled: true)
             previewPolyline?.map = nil
-
-            #if DEBUG
-            if debugSimulateAlongRoute {
-                mapView.locationSimulator?.simulateLocationsAlongExistingRoute()
-            }
-            #endif
 
             notifyStarted()
         }
 
         private func stopNavigation() {
             guard let mapView else { return }
-            #if DEBUG
-            mapView.locationSimulator?.stopSimulation()
-            #endif
             if let navigator = mapView.navigator {
                 navigator.isGuidanceActive = false
                 navigator.sendsBackgroundNotifications = false
@@ -782,6 +1160,7 @@ private struct GoogleMapView: UIViewRepresentable {
             UIApplication.shared.isIdleTimerDisabled = false
             lastFittedPairKey = nil
             isStarting = false
+            clearNavigationDisplayInfo()
             updatePreviewPolyline(previewRoute, mode: .showRoute)
             updateMarkers(
                 source: source,
@@ -789,6 +1168,54 @@ private struct GoogleMapView: UIViewRepresentable {
                 mode: .showRoute,
                 previewRoute: previewRoute
             )
+        }
+
+        private func publishNavigationDisplayInfo(_ info: NavigationDisplayInfo) {
+            guard info != lastPublishedDisplayInfo else { return }
+            lastPublishedDisplayInfo = info
+            let callback = onNavigationInfoUpdated
+            Task { @MainActor in callback(info) }
+        }
+
+        private func clearNavigationDisplayInfo() {
+            lastPublishedDisplayInfo = .empty
+            let callback = onNavigationInfoCleared
+            Task { @MainActor in callback() }
+        }
+
+        private func makeDisplayInfo(from navInfo: GMSNavigationNavInfo) -> NavigationDisplayInfo {
+            let remainingTimeText = Self.formatRemainingTime(
+                seconds: navInfo.roundedTime(navInfo.timeToFinalDestinationSeconds)
+            )
+            let remainingDistanceText = distanceFormatter.string(
+                from: navInfo.roundedDistance(navInfo.distanceToFinalDestinationMeters)
+            )
+
+            let step = navInfo.currentStep
+            let instruction = step?.fullInstructionText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let road = step?.simpleRoadName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let image = step?.maneuverImage(with: nil)
+
+            return NavigationDisplayInfo(
+                remainingTimeText: remainingTimeText.isEmpty ? "--" : remainingTimeText,
+                remainingDistanceText: remainingDistanceText.isEmpty ? "--" : remainingDistanceText,
+                instructionText: instruction.isEmpty ? "Continue" : instruction,
+                roadName: road,
+                maneuverImage: image
+            )
+        }
+
+        private static func formatRemainingTime(seconds: TimeInterval) -> String {
+            let totalMinutes = max(1, Int((seconds / 60.0).rounded()))
+            if totalMinutes < 60 {
+                return "\(totalMinutes) min"
+            }
+            let hours = totalMinutes / 60
+            let minutes = totalMinutes % 60
+            if minutes == 0 {
+                return "\(hours) hr"
+            }
+            return "\(hours) hr \(minutes) min"
         }
 
         private func notifyStarted() {
@@ -947,6 +1374,20 @@ private struct GoogleMapView: UIViewRepresentable {
         func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
 
         // MARK: GMSNavigatorListener
+
+        func navigator(_ navigator: GMSNavigator, didUpdate navInfo: GMSNavigationNavInfo) {
+            switch navInfo.navState {
+            case .enroute:
+                if let mapView {
+                    applyDisabledGoogleNavigationControls(on: mapView)
+                }
+                publishNavigationDisplayInfo(makeDisplayInfo(from: navInfo))
+            case .stopped:
+                clearNavigationDisplayInfo()
+            default:
+                break
+            }
+        }
 
         func navigator(_ navigator: GMSNavigator, didArriveAt waypoint: GMSNavigationWaypoint) {
             notifyArrived()

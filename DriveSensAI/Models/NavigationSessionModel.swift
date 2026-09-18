@@ -25,11 +25,6 @@ final class NavigationSessionModel: ObservableObject {
     @Published private(set) var navigationStartRequestID: UUID?
     @Published private(set) var navigationEndRequestID: UUID?
 
-    #if DEBUG
-    /// Off by default. Safe stationary testing only — never enabled in Release.
-    @Published var debugSimulateAlongRoute = false
-    #endif
-
     private let routesService = GoogleRoutesService()
     private var routeTask: Task<Void, Never>?
     private var routeGeneration = 0
@@ -260,6 +255,7 @@ final class NavigationSessionModel: ObservableObject {
     }
 
     func handleNavigationStartupSucceeded() {
+        print("[NAV 4] Model changing to navigation mode")
         cancelStartupTimeout()
         isStartingNavigation = false
         navigationStartRequestID = nil
