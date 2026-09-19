@@ -24,3 +24,9 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+AIPackages/CrimePredictor/src/saved_weights/
+AIPackages/CrimePredictor/src/outputs/
+AIPackages/CrimePredictor/__pycache__/
+AIPackages/CrimePredictor/*.py[cod]
+
