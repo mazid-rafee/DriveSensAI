@@ -23,7 +23,7 @@ struct DirectionsSearchCard: View {
     var onSwap: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 6) {
             VStack(spacing: 0) {
                 fieldRow(
                     field: .source,
@@ -35,7 +35,7 @@ struct DirectionsSearchCard: View {
                 )
 
                 Divider()
-                    .padding(.leading, 28)
+                    .padding(.leading, 22)
 
                 fieldRow(
                     field: .destination,
@@ -49,21 +49,21 @@ struct DirectionsSearchCard: View {
 
             Button(action: onSwap) {
                 Image(systemName: "arrow.up.arrow.down")
-                    .font(.body.weight(.semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(minWidth: 36, minHeight: 36)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Swap starting point and destination")
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 6)
-        .padding(.vertical, 6)
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
         .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(.systemBackground))
-                .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 4)
+                .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 3)
         }
         .accessibilityElement(children: .contain)
         // Observe the bound strings directly so each keystroke is delivered immediately.
@@ -84,15 +84,17 @@ struct DirectionsSearchCard: View {
         onClear: @escaping () -> Void
     ) -> some View {
         let isActive = focusedField.wrappedValue == field
+        let indicatorSize: CGFloat = isActive ? 12 : 8
 
-        return HStack(spacing: 12) {
+        return HStack(spacing: 8) {
             Circle()
                 .fill(indicatorColor)
-                .frame(width: 10, height: 10)
+                .frame(width: indicatorSize, height: indicatorSize)
+                .animation(.easeInOut(duration: 0.15), value: isActive)
                 .accessibilityHidden(true)
 
             TextField(placeholder, text: text)
-                .font(.body)
+                .font(.subheadline)
                 .textInputAutocapitalization(.words)
                 .disableAutocorrection(true)
                 .focused(focusedField, equals: field)
@@ -102,19 +104,15 @@ struct DirectionsSearchCard: View {
             if !text.wrappedValue.isEmpty {
                 Button(action: onClear) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.body)
+                        .font(.subheadline)
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear \(accessibilityLabel.lowercased())")
             }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 4)
-        .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isActive ? Color.accentColor.opacity(0.12) : Color.clear)
-        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 2)
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded {
             focusedField.wrappedValue = field

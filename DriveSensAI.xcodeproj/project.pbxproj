@@ -13,16 +13,32 @@
 		ECC833DE305CF6DF00B89690 /* GoogleNavigation in Frameworks */ = {isa = PBXBuildFile; productRef = ECC833DD305CF6DF00B89690 /* GoogleNavigation */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		ECROUTE01A00000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B3403BFD305C7EC200801EB8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B3403C04305C7EC200801EB8;
+			remoteInfo = DriveSensAI;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		B3403C05305C7EC200801EB8 /* DriveSensAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DriveSensAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		ECC833E0305CF80000B89690 /* DriveSensAI.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = DriveSensAI.xcconfig; sourceTree = "<group>"; };
 		ECC833E1305CF90000B89690 /* InfoPlistAdditions.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = InfoPlistAdditions.plist; sourceTree = "<group>"; };
+		ECROUTE01A00000000000004 /* DriveSensAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DriveSensAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B3403C07305C7EC200801EB8 /* DriveSensAI */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = DriveSensAI;
+			sourceTree = "<group>";
+		};
+		ECROUTE01A00000000000005 /* DriveSensAITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = DriveSensAITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -39,6 +55,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		ECROUTE01A00000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -48,6 +71,7 @@
 				ECC833E0305CF80000B89690 /* DriveSensAI.xcconfig */,
 				ECC833E1305CF90000B89690 /* InfoPlistAdditions.plist */,
 				B3403C07305C7EC200801EB8 /* DriveSensAI */,
+				ECROUTE01A00000000000005 /* DriveSensAITests */,
 				ECC833D2305CEFFA00B89690 /* Frameworks */,
 				B3403C06305C7EC200801EB8 /* Products */,
 			);
@@ -57,6 +81,7 @@
 			isa = PBXGroup;
 			children = (
 				B3403C05305C7EC200801EB8 /* DriveSensAI.app */,
+				ECROUTE01A00000000000004 /* DriveSensAITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -97,6 +122,29 @@
 			productReference = B3403C05305C7EC200801EB8 /* DriveSensAI.app */;
 			productType = "com.apple.product-type.application";
 		};
+		ECROUTE01A00000000000007 /* DriveSensAITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = ECROUTE01A0000000000000C /* Build configuration list for PBXNativeTarget "DriveSensAITests" */;
+			buildPhases = (
+				ECROUTE01A00000000000008 /* Sources */,
+				ECROUTE01A00000000000006 /* Frameworks */,
+				ECROUTE01A00000000000009 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				ECROUTE01A0000000000000A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				ECROUTE01A00000000000005 /* DriveSensAITests */,
+			);
+			name = DriveSensAITests;
+			packageProductDependencies = (
+			);
+			productName = DriveSensAITests;
+			productReference = ECROUTE01A00000000000004 /* DriveSensAITests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -109,6 +157,10 @@
 				TargetAttributes = {
 					B3403C04305C7EC200801EB8 = {
 						CreatedOnToolsVersion = 26.6;
+					};
+					ECROUTE01A00000000000007 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = B3403C04305C7EC200801EB8;
 					};
 				};
 			};
@@ -132,12 +184,20 @@
 			projectRoot = "";
 			targets = (
 				B3403C04305C7EC200801EB8 /* DriveSensAI */,
+				ECROUTE01A00000000000007 /* DriveSensAITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B3403C03305C7EC200801EB8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ECROUTE01A00000000000009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -154,7 +214,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		ECROUTE01A00000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		ECROUTE01A0000000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B3403C04305C7EC200801EB8 /* DriveSensAI */;
+			targetProxy = ECROUTE01A00000000000002 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B3403C0E305C7EC400801EB8 /* Debug */ = {
@@ -356,6 +431,52 @@
 			};
 			name = Release;
 		};
+		ECROUTE01A0000000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = TA74DA3FW3;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zaimazarnaz.drivesensai.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DriveSensAI.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/DriveSensAI";
+			};
+			name = Debug;
+		};
+		ECROUTE01A0000000000000D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = TA74DA3FW3;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zaimazarnaz.drivesensai.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DriveSensAI.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/DriveSensAI";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -373,6 +494,15 @@
 			buildConfigurations = (
 				B3403C11305C7EC400801EB8 /* Debug */,
 				B3403C12305C7EC400801EB8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		ECROUTE01A0000000000000C /* Build configuration list for PBXNativeTarget "DriveSensAITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ECROUTE01A0000000000000B /* Debug */,
+				ECROUTE01A0000000000000D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

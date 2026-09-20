@@ -25,8 +25,9 @@ fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
 
-DriveSensAI/AIPackages/CrimePredictor/src/saved_weights/
-DriveSensAI/AIPackages/CrimePredictor/src/outputs/
-DriveSensAI/AIPackages/CrimePredictor/__pycache__/
-DriveSensAI/AIPackages/CrimePredictor/*.py[cod]
 
+# CrimePredictor local artifacts / bytecode (repo-root AIPackages/)
+AIPackages/CrimePredictor/src/saved_weights/
+AIPackages/CrimePredictor/src/outputs/
+AIPackages/CrimePredictor/**/__pycache__/
+AIPackages/CrimePredictor/**/*.py[cod]
