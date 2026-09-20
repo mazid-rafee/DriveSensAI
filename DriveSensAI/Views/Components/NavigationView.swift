@@ -10,6 +10,9 @@ import GoogleMaps
 import GoogleNavigation
 import UIKit
 
+/// Temporary presentation colors for SHOW ROUTE polylines were replaced by
+/// `MockRouteSafetyStyle` (green / amber / red mock safety tiers).
+
 /// Compact guidance payload published from the Navigation SDK for custom SwiftUI chrome.
 private struct NavigationDisplayInfo: Equatable {
     var remainingTimeText: String
@@ -64,6 +67,7 @@ struct NavigationView: View {
             GoogleMapView(
                 source: session.selectedSource,
                 destination: session.selectedDestination,
+                previewRoutes: session.previewRoutes,
                 previewRoute: session.previewRoute,
                 mode: session.mode,
                 colorScheme: colorScheme,
@@ -104,6 +108,9 @@ struct NavigationView: View {
 
             if session.mode != .navigation {
                 searchOverlay
+                    // Intrinsic height only — do not cover the map with a full-screen hit block.
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .allowsHitTesting(true)
                     .zIndex(2)
             }
 
@@ -129,6 +136,7 @@ struct NavigationView: View {
             }
 
             VStack {
+                // Pass route taps through empty space to the map; keep controls hittable.
                 Spacer(minLength: 0)
                     .allowsHitTesting(false)
                 bottomControlsBar
@@ -217,7 +225,7 @@ struct NavigationView: View {
             }
 
             if session.mode == .showRoute {
-                routeStatusBanner
+                routeOptionsSection
             }
 
             if session.isStartingNavigation && session.mode != .navigation {
@@ -255,39 +263,62 @@ struct NavigationView: View {
         .padding(.top, 12)
     }
 
+    /// Display-only ordering: safest → unsafest. Does not mutate `previewRoutes` / extraction order.
+    private var safetySortedPreviewRoutes: [ComputedRoute] {
+        MockRouteRiskScorer.rankedSafestFirst(session.previewRoutes)
+    }
+
     @ViewBuilder
-    private var routeStatusBanner: some View {
-        HStack(spacing: 10) {
-            if session.routeState.isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Finding route…")
-                    .font(.subheadline.weight(.medium))
-            } else if let route = session.previewRoute, session.routeState.isReady {
-                Image(systemName: "car.fill")
-                    .foregroundStyle(.blue)
-                Text(route.summaryText)
-                    .font(.subheadline.weight(.semibold))
-            } else if let failure = session.routeState.failureMessage {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text(failure)
-                    .font(.footnote)
-                    .lineLimit(2)
-                Spacer(minLength: 0)
-                Button("Retry") { session.retryPreviewRoute() }
-                    .font(.footnote.weight(.semibold))
+    private var routeOptionsSection: some View {
+        if session.routeState.isLoading {
+            routeStatusChrome {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Finding route…")
+                        .font(.subheadline.weight(.medium))
+                    Spacer(minLength: 0)
+                }
             }
-            Spacer(minLength: 0)
+        } else if session.routeState.isReady, !safetySortedPreviewRoutes.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(Array(safetySortedPreviewRoutes.enumerated()), id: \.element.id) { index, route in
+                    RouteOptionCard(
+                        displayRank: index + 1,
+                        route: route,
+                        isSelected: route.id == session.selectedRouteID,
+                        onSelect: { session.selectRoute(id: route.id) }
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        } else if let failure = session.routeState.failureMessage {
+            routeStatusChrome {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(failure)
+                        .font(.footnote)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    Button("Retry") { session.retryPreviewRoute() }
+                        .font(.footnote.weight(.semibold))
+                }
+            }
         }
-        .foregroundStyle(.primary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.systemBackground))
-                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-        }
+    }
+
+    private func routeStatusChrome<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(.systemBackground))
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+            }
     }
 
     @ViewBuilder
@@ -318,6 +349,9 @@ struct NavigationView: View {
 
     private var goButton: some View {
         Button {
+            #if DEBUG
+            print("[NAV_GO] tapped isGOEnabled=\(session.isGOEnabled) mode=\(session.mode) selected=\(session.selectedRouteID ?? "nil")")
+            #endif
             if session.isGOEnabled {
                 focusedField = nil
                 placesService.clearResults()
@@ -332,7 +366,7 @@ struct NavigationView: View {
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 56, height: 56)
-                .background(Color.green, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(goButtonColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
                 .opacity(session.isGOEnabled ? 1.0 : 0.45)
         }
@@ -343,6 +377,11 @@ struct NavigationView: View {
                 ? "Starts turn-by-turn guidance"
                 : "Choose a starting point and destination first."
         )
+    }
+
+    /// Always uses the safest-route green (`#34A853`).
+    private var goButtonColor: Color {
+        Color(uiColor: MockRouteSafetyStyle.baseColor(for: .safest))
     }
 
     private var endNavigationButton: some View {
@@ -598,6 +637,7 @@ struct NavigationView: View {
 private struct GoogleMapView: UIViewRepresentable {
     var source: SelectedPlace?
     var destination: SelectedPlace?
+    var previewRoutes: [ComputedRoute]
     var previewRoute: ComputedRoute?
     var mode: NavigationMode
     var colorScheme: ColorScheme
@@ -646,24 +686,25 @@ private struct GoogleMapView: UIViewRepresentable {
         context.coordinator.attach(to: mapView)
         context.coordinator.syncCallbacks(from: self)
         context.coordinator.applyInterfaceStyle(colorScheme, navigationEnabled: false)
-        context.coordinator.updateMarkers(source: source, destination: destination, mode: mode, previewRoute: previewRoute)
-        context.coordinator.updatePreviewPolyline(previewRoute, mode: mode)
+        context.coordinator.updateMarkers(source: source, destination: destination, mode: mode, previewRoutes: previewRoutes)
+        context.coordinator.updatePreviewPolylines(previewRoutes, selectedRoute: previewRoute, mode: mode)
         return mapView
     }
 
-    func updateUIView(_ mapView: GMSMapView, context: Context) {
+        func updateUIView(_ mapView: GMSMapView, context: Context) {
         let coordinator = context.coordinator
         coordinator.syncCallbacks(from: self)
         coordinator.source = source
         coordinator.destination = destination
+        coordinator.previewRoutes = previewRoutes
         coordinator.previewRoute = previewRoute
         coordinator.mode = mode
         coordinator.colorScheme = colorScheme
         coordinator.applyInterfaceStyle(colorScheme, navigationEnabled: mapView.isNavigationEnabled)
         // Apply padding before route fitting so camera fit uses the final layout insets.
         coordinator.applyModePresentation(mode)
-        coordinator.updateMarkers(source: source, destination: destination, mode: mode, previewRoute: previewRoute)
-        coordinator.updatePreviewPolyline(previewRoute, mode: mode)
+        coordinator.updateMarkers(source: source, destination: destination, mode: mode, previewRoutes: previewRoutes)
+        coordinator.updatePreviewPolylines(previewRoutes, selectedRoute: previewRoute, mode: mode)
         coordinator.handleNavigationStartIfNeeded(navigationStartRequestID)
         coordinator.handleNavigationEndIfNeeded(navigationEndRequestID)
         coordinator.handleCameraToggleIfNeeded(navigationCameraToggleRequestID)
@@ -673,6 +714,7 @@ private struct GoogleMapView: UIViewRepresentable {
     final class Coordinator: NSObject, CLLocationManagerDelegate, GMSNavigatorListener {
         var source: SelectedPlace?
         var destination: SelectedPlace?
+        var previewRoutes: [ComputedRoute] = []
         var previewRoute: ComputedRoute?
         var mode: NavigationMode = .chooseLocation
         var colorScheme: ColorScheme = .dark
@@ -690,9 +732,10 @@ private struct GoogleMapView: UIViewRepresentable {
         private var didApplyLiveFix = false
         private var sourceMarker: GMSMarker?
         private var destinationMarker: GMSMarker?
-        private var previewPolyline: GMSPolyline?
+        private var previewPolylines: [String: GMSPolyline] = [:]
         private var lastFittedPairKey: String?
-        private var lastPolylineKey: String?
+        private var lastPolylineGeometryKey: String?
+        private var lastSelectedPolylineID: String?
         private var lastSourcePlaceID: String?
         private var lastDestinationPlaceID: String?
         private var handledStartID: UUID?
@@ -759,19 +802,33 @@ private struct GoogleMapView: UIViewRepresentable {
                 mapView.padding = UIEdgeInsets(top: 72, left: 12, bottom: 80, right: 12)
                 mapView.settings.isNavigationHeaderEnabled = false
                 mapView.settings.isNavigationFooterEnabled = false
-                previewPolyline?.map = nil
+                setPreviewPolylinesVisible(false)
             } else {
                 // Symmetric insets for search chrome + GO / My Location row.
                 // Keep modest so route-preview camera fit is not double-padded into a regional zoom.
                 mapView.padding = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
-                if let previewPolyline {
-                    previewPolyline.map = mapView
-                }
+                setPreviewPolylinesVisible(mode == .showRoute)
             }
 
             #if DEBUG
             print("[Navigation UI] mode=\(mode), myLocationButton=\(mapView.settings.myLocationButton)")
             #endif
+        }
+
+        private func setPreviewPolylinesVisible(_ visible: Bool) {
+            guard let mapView else { return }
+            for polyline in previewPolylines.values {
+                polyline.map = visible ? mapView : nil
+            }
+        }
+
+        private func clearPreviewPolylines() {
+            for polyline in previewPolylines.values {
+                polyline.map = nil
+            }
+            previewPolylines.removeAll()
+            lastPolylineGeometryKey = nil
+            lastSelectedPolylineID = nil
         }
 
         private func applyDisabledGoogleNavigationControls(on mapView: GMSMapView) {
@@ -787,7 +844,7 @@ private struct GoogleMapView: UIViewRepresentable {
             source: SelectedPlace?,
             destination: SelectedPlace?,
             mode: NavigationMode,
-            previewRoute: ComputedRoute?
+            previewRoutes: [ComputedRoute]
         ) {
             guard let mapView else { return }
 
@@ -831,99 +888,159 @@ private struct GoogleMapView: UIViewRepresentable {
                 fitCameraToRouteOrMarkers(
                     source: source,
                     destination: destination,
-                    route: previewRoute,
+                    routes: previewRoutes,
                     force: true
                 )
             }
         }
 
-        func updatePreviewPolyline(_ route: ComputedRoute?, mode: NavigationMode) {
+        func updatePreviewPolylines(
+            _ routes: [ComputedRoute],
+            selectedRoute: ComputedRoute?,
+            mode: NavigationMode
+        ) {
             guard let mapView else { return }
 
-            guard let route else {
-                previewPolyline?.map = nil
-                previewPolyline = nil
-                lastPolylineKey = nil
+            guard mode == .showRoute, !routes.isEmpty else {
+                clearPreviewPolylines()
                 return
             }
 
-            let key = "\(route.sourcePlaceID)|\(route.destinationPlaceID)|\(route.encodedPolyline)"
-            let isNewRoute = key != lastPolylineKey
-            if !isNewRoute, previewPolyline != nil {
-                if mode != .navigation {
-                    previewPolyline?.map = mapView
+            let selectedID = selectedRoute?.id
+                ?? routes.first(where: { $0.safetyTier == .safest })?.id
+                ?? routes.first?.id
+            // Include geometry fingerprint so a new Routes response with the same IDs still redraws.
+            let geometryKey = routes
+                .map { "\($0.id)#\($0.encodedPolyline.count):\($0.distanceMeters)" }
+                .joined(separator: "||")
+
+            // Same route geometries: restyle selection only — do not recreate or refit camera.
+            if geometryKey == lastPolylineGeometryKey, !previewPolylines.isEmpty {
+                if selectedID != lastSelectedPolylineID {
+                    applySafetyStyles(to: routes, selectedID: selectedID)
+                    lastSelectedPolylineID = selectedID
+                } else {
+                    // Keep userData associated for styling lookups across SwiftUI redraws.
+                    for route in routes {
+                        guard let polyline = previewPolylines[route.id] else { continue }
+                        polyline.isTappable = false
+                        polyline.userData = route.id
+                    }
                 }
+                setPreviewPolylinesVisible(true)
                 return
             }
-            lastPolylineKey = key
 
-            previewPolyline?.map = nil
-            guard let path = GMSPath(fromEncodedPath: route.encodedPolyline), path.count() > 0 else {
-                if mode == .showRoute {
-                    fitCameraToRouteOrMarkers(
-                        source: source,
-                        destination: destination,
-                        route: nil,
-                        force: true
-                    )
+            clearPreviewPolylines()
+            lastPolylineGeometryKey = geometryKey
+            lastSelectedPolylineID = selectedID
+
+            // Draw unselected first, selected last so z-order is correct even before zIndex.
+            let ordered = routes.sorted { lhs, rhs in
+                let lhsSelected = lhs.id == selectedID
+                let rhsSelected = rhs.id == selectedID
+                if lhsSelected != rhsSelected {
+                    return !lhsSelected && rhsSelected
                 }
-                return
+                return lhs.responseIndex < rhs.responseIndex
             }
 
-            let polyline = GMSPolyline(path: path)
-            polyline.strokeWidth = 6
-            polyline.strokeColor = UIColor.systemBlue
-            polyline.geodesic = true
-            polyline.zIndex = 50
-            polyline.map = mode == .navigation ? nil : mapView
-            previewPolyline = polyline
+            var didDrawAny = false
+            for route in ordered {
+                guard let path = GMSPath(fromEncodedPath: route.encodedPolyline), path.count() > 0 else {
+                    continue
+                }
+                let isSelected = route.id == selectedID
+                let tier = route.safetyTier ?? .medium
+                let polyline = GMSPolyline(path: path)
+                polyline.strokeWidth = MockRouteSafetyStyle.strokeWidth(isSelected: isSelected)
+                polyline.strokeColor = MockRouteSafetyStyle.strokeColor(tier: tier, isSelected: isSelected)
+                polyline.geodesic = true
+                polyline.zIndex = MockRouteSafetyStyle.zIndex(isSelected: isSelected)
+                polyline.isTappable = false
+                polyline.userData = route.id
+                polyline.map = mapView
+                previewPolylines[route.id] = polyline
+                didDrawAny = true
+                #if DEBUG
+                print(
+                    "[Routes] created polyline id=\(route.id) tappable=\(polyline.isTappable) width=\(polyline.strokeWidth) z=\(polyline.zIndex)"
+                )
+                #endif
+            }
 
-            if mode == .showRoute {
+            #if DEBUG
+            print("[Routes] drew \(previewPolylines.count) polyline(s); selected=\(selectedID ?? "nil")")
+            #endif
+
+            if didDrawAny {
                 lastFittedPairKey = nil
                 fitCameraToRouteOrMarkers(
                     source: source,
                     destination: destination,
-                    route: route,
+                    routes: routes,
                     force: true
                 )
+            } else if mode == .showRoute {
+                fitCameraToRouteOrMarkers(
+                    source: source,
+                    destination: destination,
+                    routes: [],
+                    force: true
+                )
+            }
+        }
+
+        /// Updates stroke color/width/zIndex for existing polylines without recreating geometry.
+        private func applySafetyStyles(to routes: [ComputedRoute], selectedID: String?) {
+            for route in routes {
+                guard let polyline = previewPolylines[route.id] else { continue }
+                let isSelected = route.id == selectedID
+                let tier = route.safetyTier ?? .medium
+                polyline.strokeColor = MockRouteSafetyStyle.strokeColor(tier: tier, isSelected: isSelected)
+                polyline.strokeWidth = MockRouteSafetyStyle.strokeWidth(isSelected: isSelected)
+                polyline.zIndex = MockRouteSafetyStyle.zIndex(isSelected: isSelected)
+                polyline.isTappable = false
+                polyline.userData = route.id
             }
         }
 
         private func fitCameraToRouteOrMarkers(
             source: SelectedPlace?,
             destination: SelectedPlace?,
-            route: ComputedRoute?,
+            routes: [ComputedRoute],
             force: Bool
         ) {
             guard mode == .showRoute, let mapView else { return }
 
             let insets = UIEdgeInsets(
-                top: 175,
-                left: 24,
-                bottom: 90,
-                right: 24
+                top: 170,
+                left: 56,
+                bottom: 88,
+                right: 56
             )
 
-            if let route,
-               let path = GMSPath(fromEncodedPath: route.encodedPolyline),
-               path.count() > 0 {
-                let pairKey = "route:\(route.sourcePlaceID)|\(route.destinationPlaceID)|\(route.encodedPolyline)"
+            if !routes.isEmpty {
+                let pairKey = "routes:" + routes.map(\.id).joined(separator: "|")
                 if !force, pairKey == lastFittedPairKey { return }
-                lastFittedPairKey = pairKey
 
-                var routeBounds: GMSCoordinateBounds?
-                for index in 0..<path.count() {
-                    let coordinate = path.coordinate(at: index)
-                    guard CLLocationCoordinate2DIsValid(coordinate) else { continue }
-                    if let existing = routeBounds {
-                        routeBounds = existing.includingCoordinate(coordinate)
-                    } else {
-                        routeBounds = GMSCoordinateBounds(coordinate: coordinate, coordinate: coordinate)
+                var combinedBounds: GMSCoordinateBounds?
+                for route in routes {
+                    guard let path = GMSPath(fromEncodedPath: route.encodedPolyline) else { continue }
+                    for index in 0..<path.count() {
+                        let coordinate = path.coordinate(at: index)
+                        guard CLLocationCoordinate2DIsValid(coordinate) else { continue }
+                        if let existing = combinedBounds {
+                            combinedBounds = existing.includingCoordinate(coordinate)
+                        } else {
+                            combinedBounds = GMSCoordinateBounds(coordinate: coordinate, coordinate: coordinate)
+                        }
                     }
                 }
 
-                if let routeBounds {
-                    animateCameraFit(routeBounds, insets: insets, on: mapView)
+                if let combinedBounds {
+                    lastFittedPairKey = pairKey
+                    animateCameraFit(combinedBounds, insets: insets, on: mapView)
                     return
                 }
             }
@@ -1056,6 +1173,9 @@ private struct GoogleMapView: UIViewRepresentable {
         }
 
         private func beginNavigationFlow() {
+            #if DEBUG
+            print("[NAV_GO] beginNavigationFlow mapReady=\(mapView != nil) selectedPreview=\(previewRoute?.id ?? "nil")")
+            #endif
             guard let mapView else {
                 notifyFailed("Map is not ready.")
                 return
@@ -1140,7 +1260,7 @@ private struct GoogleMapView: UIViewRepresentable {
             mapView.cameraMode = .following
             applyDisabledGoogleNavigationControls(on: mapView)
             applyInterfaceStyle(colorScheme, navigationEnabled: true)
-            previewPolyline?.map = nil
+            setPreviewPolylinesVisible(false)
 
             notifyStarted()
         }
@@ -1161,12 +1281,12 @@ private struct GoogleMapView: UIViewRepresentable {
             lastFittedPairKey = nil
             isStarting = false
             clearNavigationDisplayInfo()
-            updatePreviewPolyline(previewRoute, mode: .showRoute)
+            updatePreviewPolylines(previewRoutes, selectedRoute: previewRoute, mode: .showRoute)
             updateMarkers(
                 source: source,
                 destination: destination,
                 mode: .showRoute,
-                previewRoute: previewRoute
+                previewRoutes: previewRoutes
             )
         }
 
@@ -1342,7 +1462,7 @@ private struct GoogleMapView: UIViewRepresentable {
             guard mode != .navigation,
                   sourceMarker == nil,
                   destinationMarker == nil,
-                  previewPolyline == nil else { return }
+                  previewPolylines.isEmpty else { return }
 
             let camera = GMSCameraPosition.camera(withTarget: location.coordinate, zoom: 16)
             if animated {

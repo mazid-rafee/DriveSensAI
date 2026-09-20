@@ -34,12 +34,35 @@ enum RouteLoadingState: Equatable {
     }
 }
 
-struct ComputedRoute: Equatable {
+/// One flattened navigation step retained with a preview route candidate.
+struct ComputedRouteStep: Equatable, Sendable {
+    var encodedPolyline: String
+    var distanceMeters: Int
+    var staticDurationSeconds: Double
+}
+
+struct ComputedRoute: Equatable, Identifiable, Sendable {
+    /// Deterministic Google response-order ID (`route_0`, `route_1`, …). Also used as `Identifiable.id`.
+    var id: String
     var encodedPolyline: String
     var durationText: String
+    /// Traffic-aware overall duration in seconds when parsing succeeded.
+    var durationSeconds: Double?
     var distanceMeters: Int
     var sourcePlaceID: String
     var destinationPlaceID: String
+    var routeLabels: [String]
+    var isDefault: Bool
+    var responseIndex: Int
+    /// Ordered steps flattened across all legs.
+    var steps: [ComputedRouteStep]
+    /// Whether this candidate can produce a backend extraction payload.
+    var isExtractionReady: Bool
+    /// Temporary mock crime-risk score in `0.0...1.0` (lower = safer).
+    /// TODO: Replace with Python model crime-risk scores.
+    var mockCrimeScore: Double?
+    /// Relative safety tier among the current route set (mock ranking only).
+    var safetyTier: MockRouteSafetyTier?
 
     var distanceMilesText: String {
         let miles = Double(distanceMeters) / 1609.344
