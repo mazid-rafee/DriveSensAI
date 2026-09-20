@@ -1,0 +1,5 @@
+src/saved_weights/
+src/outputs/
+# Python cache
+__pycache__/
+*.py[cod]
