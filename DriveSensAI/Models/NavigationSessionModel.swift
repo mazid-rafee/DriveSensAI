@@ -26,15 +26,26 @@ final class NavigationSessionModel: ObservableObject {
     /// Shared client departure timestamp for the latest successful Routes API request.
     @Published private(set) var routeDepartureTime: Date?
 
+    /// Capture-only CrimePredictor state (does not affect mock scores / UI selection).
+    @Published private(set) var routePredictionState: RoutePredictionState = .idle
+    @Published private(set) var activePredictionRequestID: String?
+    @Published private(set) var lastRoutePredictionResponse: RoutePredictionResponse?
+    @Published private(set) var lastRoutePredictionError: String?
+
     @Published private(set) var isStartingNavigation = false
     @Published var statusMessage: String?
     @Published private(set) var navigationStartRequestID: UUID?
     @Published private(set) var navigationEndRequestID: UUID?
 
     private let routesService = GoogleRoutesService()
+    private let crimePredictionService = CrimePredictionService.shared
     private var routeTask: Task<Void, Never>?
+    private var predictionTask: Task<Void, Never>?
     private var routeGeneration = 0
+    private var predictionGeneration = 0
     private var startupTimeoutTask: Task<Void, Never>?
+    /// Google routes held until CrimePredictor safety scores are applied.
+    private var pendingUnscoredRoutes: [ComputedRoute] = []
 
     var hasValidSource: Bool {
         guard let selectedSource else { return false }
@@ -184,8 +195,9 @@ final class NavigationSessionModel: ObservableObject {
                             )
                         },
                         isExtractionReady: candidate.isExtractionReady,
-                        mockCrimeScore: nil,
-                        safetyTier: nil
+                        safetyScore: nil,
+                        safetyTier: nil,
+                        hasInsufficientSafetyInfo: false
                     )
                 }
 
@@ -194,6 +206,7 @@ final class NavigationSessionModel: ObservableObject {
                 return
             } catch {
                 guard !Task.isCancelled, generation == self.routeGeneration else { return }
+                self.cancelRoutePrediction(resetState: true)
                 self.previewRoutes = []
                 self.previewRoute = nil
                 self.selectedRouteID = nil
@@ -206,32 +219,35 @@ final class NavigationSessionModel: ObservableObject {
 
     /// Clears selection and preview routes when a new Routes API request begins.
     func resetPreviewSelectionState() {
+        cancelRoutePrediction(resetState: true)
+        pendingUnscoredRoutes = []
         previewRoutes = []
         previewRoute = nil
         selectedRouteID = nil
         routeDepartureTime = nil
     }
 
-    /// Scores routes once, selects the safest by mock crime score, and stores extraction departure time.
+    /// Installs Google routes privately, then requests CrimePredictor scores before UI ready.
     func installPreviewRoutes(_ routes: [ComputedRoute], departureTime: Date) {
-        let scored = MockRouteRiskScorer.applyingScoresAndTiers(to: routes)
-        let safestID = MockRouteRiskScorer.safestRouteID(in: scored)
-        let selected = scored.first(where: { $0.id == safestID }) ?? scored.first
+        let ordered = routes.sorted { $0.responseIndex < $1.responseIndex }
 
-        previewRoutes = scored
-        selectedRouteID = selected?.id
-        previewRoute = selected
+        // Keep map/cards empty until safety tiers exist — avoids flashing all-yellow (nil → medium).
+        pendingUnscoredRoutes = ordered
+        previewRoutes = []
+        previewRoute = nil
+        selectedRouteID = nil
         routeDepartureTime = departureTime
-        routeState = .ready
+        routeState = .loading
 
         #if DEBUG
-        MockRouteRiskScorer.logScores(scored, selectedRouteID: selected?.id)
         let payloads = RouteExtractionBuilder.buildPayloads(
-            routes: scored,
+            routes: ordered,
             departureTime: departureTime
         )
         RouteExtractionBuilder.logPayloads(payloads)
         #endif
+
+        requestCrimePredictions(for: ordered, departureTime: departureTime)
     }
 
     /// Updates the selected preview route without refetching or rescoring.
@@ -286,6 +302,161 @@ final class NavigationSessionModel: ObservableObject {
         routeGeneration += 1
         resetPreviewSelectionState()
         routeState = .idle
+    }
+
+    // MARK: - Crime prediction (capture-only)
+
+    /// Sends all extraction-ready routes to the local CrimePredictor API.
+    /// On success, replaces provisional selection with model-based safety ranking.
+    private func requestCrimePredictions(for routes: [ComputedRoute], departureTime: Date) {
+        cancelRoutePrediction(resetState: false)
+
+        let payloads = RouteExtractionBuilder.buildPayloads(
+            routes: routes,
+            departureTime: departureTime
+        )
+        guard !payloads.isEmpty else {
+            routePredictionState = .failed("No extraction-ready routes to score.")
+            lastRoutePredictionError = "No extraction-ready routes to score."
+            lastRoutePredictionResponse = nil
+            activePredictionRequestID = nil
+            // Publish unscored Google routes so the user is not stuck loading.
+            if previewRoutes.isEmpty, !pendingUnscoredRoutes.isEmpty {
+                let fallback = pendingUnscoredRoutes
+                pendingUnscoredRoutes = []
+                previewRoutes = fallback
+                selectedRouteID = fallback.first?.id
+                previewRoute = fallback.first
+            }
+            routeState = .ready
+            return
+        }
+
+        predictionGeneration += 1
+        let generation = predictionGeneration
+        let requestID = UUID().uuidString
+        let request = RoutePredictionRequest(requestID: requestID, routes: payloads)
+        let expectedRouteIDs = Set(payloads.map(\.routeID))
+
+        activePredictionRequestID = requestID
+        lastRoutePredictionError = nil
+        routePredictionState = .loading
+
+        predictionTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let response = try await self.crimePredictionService.predictRoutes(request)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self.handleCrimePredictionSuccess(
+                        response,
+                        generation: generation,
+                        expectedRequestID: requestID,
+                        expectedRouteIDs: expectedRouteIDs
+                    )
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self.handleCrimePredictionFailure(
+                        error,
+                        generation: generation,
+                        expectedRequestID: requestID
+                    )
+                }
+            }
+        }
+    }
+
+    private func handleCrimePredictionSuccess(
+        _ response: RoutePredictionResponse,
+        generation: Int,
+        expectedRequestID: String,
+        expectedRouteIDs: Set<String>
+    ) {
+        guard generation == predictionGeneration else { return }
+        guard activePredictionRequestID == expectedRequestID else { return }
+        guard response.requestID == expectedRequestID else {
+            let message = "Mismatched prediction request_id."
+            lastRoutePredictionError = message
+            routePredictionState = .failed(message)
+            return
+        }
+        let returnedIDs = Set(response.routes.map(\.routeID))
+        guard returnedIDs == expectedRouteIDs else {
+            let message = "Prediction route IDs do not match the current route set."
+            lastRoutePredictionError = message
+            routePredictionState = .failed(message)
+            return
+        }
+
+        lastRoutePredictionResponse = response
+        lastRoutePredictionError = nil
+        routePredictionState = .ready(response)
+
+        let baseRoutes = previewRoutes.isEmpty ? pendingUnscoredRoutes : previewRoutes
+        let scored = RouteRiskScorer.applyingPredictionScores(
+            to: baseRoutes,
+            response: response
+        )
+        let safestID = RouteRiskScorer.safestRouteID(in: scored)
+        pendingUnscoredRoutes = []
+        previewRoutes = scored
+        if let safestID,
+           let safest = scored.first(where: { $0.id == safestID }) {
+            selectedRouteID = safestID
+            previewRoute = safest
+        } else {
+            selectedRouteID = scored.first?.id
+            previewRoute = scored.first
+        }
+        routeState = .ready
+
+        #if DEBUG
+        RoutePredictionDebugLogging.logSummary(response)
+        RouteRiskScorer.logScores(scored, selectedRouteID: selectedRouteID)
+        #endif
+    }
+
+    private func handleCrimePredictionFailure(
+        _ error: Error,
+        generation: Int,
+        expectedRequestID: String
+    ) {
+        guard generation == predictionGeneration else { return }
+        guard activePredictionRequestID == expectedRequestID else { return }
+
+        let message = error.localizedDescription
+        lastRoutePredictionError = message
+        routePredictionState = .failed(message)
+
+        // Still surface Google routes so navigation is usable; tiers stay nil (neutral UI).
+        if previewRoutes.isEmpty, !pendingUnscoredRoutes.isEmpty {
+            let fallback = pendingUnscoredRoutes
+            pendingUnscoredRoutes = []
+            previewRoutes = fallback
+            selectedRouteID = fallback.first?.id
+            previewRoute = fallback.first
+        }
+        routeState = .ready
+
+        #if DEBUG
+        RoutePredictionDebugLogging.logFailure(requestID: expectedRequestID, error: error)
+        #endif
+    }
+
+    private func cancelRoutePrediction(resetState: Bool) {
+        predictionTask?.cancel()
+        predictionTask = nil
+        predictionGeneration += 1
+        activePredictionRequestID = nil
+        if resetState {
+            routePredictionState = .idle
+            lastRoutePredictionResponse = nil
+            lastRoutePredictionError = nil
+        }
     }
 
     // MARK: - GO / navigation lifecycle

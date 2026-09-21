@@ -6,6 +6,15 @@
 	<string>$(MAPS_API_KEY)</string>
 	<key>RoutesAPIKey</key>
 	<string>$(ROUTES_API_KEY)</string>
+	<key>CRIME_API_BASE_URL</key>
+	<string>$(CRIME_API_BASE_URL)</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>DriveSensAI connects to the CrimePredictor model running on your Mac during development.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

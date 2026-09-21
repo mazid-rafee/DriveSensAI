@@ -29,5 +29,6 @@ fastlane/test_output
 # CrimePredictor local artifacts / bytecode (repo-root AIPackages/)
 AIPackages/CrimePredictor/src/saved_weights/
 AIPackages/CrimePredictor/src/outputs/
+AIPackages/CrimePredictor/.venv/
 AIPackages/CrimePredictor/**/__pycache__/
 AIPackages/CrimePredictor/**/*.py[cod]

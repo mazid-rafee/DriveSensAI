@@ -58,11 +58,13 @@ struct ComputedRoute: Equatable, Identifiable, Sendable {
     var steps: [ComputedRouteStep]
     /// Whether this candidate can produce a backend extraction payload.
     var isExtractionReady: Bool
-    /// Temporary mock crime-risk score in `0.0...1.0` (lower = safer).
-    /// TODO: Replace with Python model crime-risk scores.
-    var mockCrimeScore: Double?
-    /// Relative safety tier among the current route set (mock ranking only).
-    var safetyTier: MockRouteSafetyTier?
+    /// Safety score from the CrimePredictor model: sum of per-cell `severity_weighted_rate`.
+    /// Lower = safer among informative routes. `0` when safety info is insufficient. `nil` until scored.
+    var safetyScore: Double?
+    /// Relative safety tier among informative routes. `nil` when insufficient / unscored (gray UI).
+    var safetyTier: RouteSafetyTier?
+    /// True when OOV H3 cells exceed 97% of the route (not enough model coverage).
+    var hasInsufficientSafetyInfo: Bool
 
     var distanceMilesText: String {
         let miles = Double(distanceMeters) / 1609.344

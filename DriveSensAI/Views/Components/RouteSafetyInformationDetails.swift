@@ -1,0 +1,356 @@
+//
+//  RouteSafetyInformationDetails.swift
+//  DriveSensAI
+//
+
+import Charts
+import SwiftUI
+import UIKit
+
+/// Aggregated safety details for the long-press route overlay.
+struct RouteSafetyDetailsModel: Equatable {
+    let routeID: String
+    let durationText: String
+    let distanceText: String
+    let safetyScore: Double?
+    let safetyTierLabel: String
+    let safetyTier: RouteSafetyTier?
+    let hasInsufficientSafetyInfo: Bool
+    /// Active 3-hour bin start hour (0, 3, …, 21) used for ranking.
+    let activeHourBinStart: Int?
+    let personRate: Double?
+    let propertyRate: Double?
+    let societyRate: Double?
+    let otherRate: Double?
+    /// Severity-weighted route sum keyed by 3-hour bin start (0, 3, …, 21).
+    let severitySumByHourBin: [Int: Double]
+    let cellCount: Int
+    let scoredCellCount: Int
+    let outOfVocabularyCount: Int
+
+    /// Training 3-hour bin starts used by CrimePredictor.
+    static let hourBinStarts: [Int] = [0, 3, 6, 9, 12, 15, 18, 21]
+
+    static func build(
+        route: ComputedRoute,
+        prediction: RoutePrediction?
+    ) -> RouteSafetyDetailsModel {
+        let tierLabel: String
+        let tier: RouteSafetyTier?
+        if route.hasInsufficientSafetyInfo {
+            tierLabel = "Not enough safety information"
+            tier = nil
+        } else {
+            tier = route.safetyTier
+            switch route.safetyTier {
+            case .safest: tierLabel = "Safest"
+            case .medium: tierLabel = "Medium safety"
+            case .unsafest: tierLabel = "Unsafest"
+            case .none: tierLabel = "Unscored"
+            }
+        }
+
+        guard let prediction else {
+            return RouteSafetyDetailsModel(
+                routeID: route.id,
+                durationText: route.durationText,
+                distanceText: route.distanceMilesText,
+                safetyScore: route.safetyScore,
+                safetyTierLabel: tierLabel,
+                safetyTier: tier,
+                hasInsufficientSafetyInfo: route.hasInsufficientSafetyInfo,
+                activeHourBinStart: nil,
+                personRate: nil,
+                propertyRate: nil,
+                societyRate: nil,
+                otherRate: nil,
+                severitySumByHourBin: [:],
+                cellCount: 0,
+                scoredCellCount: 0,
+                outOfVocabularyCount: 0
+            )
+        }
+
+        var severitySumByHourBin: [Int: Double] = [:]
+        for binScore in prediction.timeBinScores {
+            severitySumByHourBin[binScore.hourBinStart] = binScore.severityWeightedSum
+        }
+
+        let activeBin = prediction.activeHourBinStart
+        let activeScore = prediction.timeBinScores.first {
+            $0.hourBinStart == activeBin
+        }
+
+        return RouteSafetyDetailsModel(
+            routeID: route.id,
+            durationText: route.durationText,
+            distanceText: route.distanceMilesText,
+            safetyScore: route.safetyScore,
+            safetyTierLabel: tierLabel,
+            safetyTier: tier,
+            hasInsufficientSafetyInfo: route.hasInsufficientSafetyInfo,
+            activeHourBinStart: activeBin,
+            personRate: activeScore?.meanPersonRate,
+            propertyRate: activeScore?.meanPropertyRate,
+            societyRate: activeScore?.meanSocietyRate,
+            otherRate: activeScore?.meanOtherRate,
+            severitySumByHourBin: severitySumByHourBin,
+            cellCount: prediction.cellCount,
+            scoredCellCount: prediction.scoredCellCount,
+            outOfVocabularyCount: prediction.outOfVocabularyCount
+        )
+    }
+}
+
+/// Scrollable route safety details card content.
+struct RouteSafetyInformationDetails: View {
+    let model: RouteSafetyDetailsModel
+
+    private var chartRows: [(label: String, sum: Double, isActive: Bool)] {
+        RouteSafetyDetailsModel.hourBinStarts.map { bin in
+            (
+                Self.hourBinLabel(bin),
+                model.severitySumByHourBin[bin] ?? 0,
+                model.activeHourBinStart == bin
+            )
+        }
+    }
+
+    /// Category order for the Y axis (midnight at top).
+    private var timeLabelDomain: [String] {
+        RouteSafetyDetailsModel.hourBinStarts.map(Self.hourBinLabel)
+    }
+
+    /// Same green as the GO button (`RouteSafetyStyle.safest` / `#34A853`).
+    private var goGreen: Color {
+        Color(uiColor: RouteSafetyStyle.baseColor(for: .safest))
+    }
+
+    private var assessmentColor: Color {
+        Color(uiColor: RouteSafetyStyle.baseColor(for: model.safetyTier))
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                headerSection
+                tripSection
+                safetySummarySection
+                if !model.hasInsufficientSafetyInfo {
+                    categoryRatesSection
+                    hourlyChartSection
+                }
+            }
+            .padding(18)
+        }
+        .frame(maxWidth: 360, maxHeight: 364)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(.systemBackground))
+                .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Route safety details for \(model.routeID)")
+    }
+
+    private var headerSection: some View {
+        Text("Route safety details")
+            .font(.title3.weight(.bold))
+    }
+
+    private var tripSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Trip")
+            detailRow(label: "Time", value: model.durationText)
+            detailRow(label: "Distance", value: model.distanceText)
+        }
+    }
+
+    private var safetySummarySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Safety")
+            if model.hasInsufficientSafetyInfo {
+                Text("Insufficient data available for reliable safety assessment")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                detailRow(
+                    label: "Assessment",
+                    value: model.safetyTierLabel,
+                    valueColor: assessmentColor
+                )
+                if let score = model.safetyScore {
+                    detailRow(
+                        label: "Safety score",
+                        value: String(format: "%.6g", score)
+                    )
+                }
+            }
+        }
+    }
+
+    private var categoryRatesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let bin = model.activeHourBinStart {
+                sectionTitle("Crime rates · \(Self.hourBinLabel(bin))")
+            } else {
+                sectionTitle("Crime rates")
+                Text("No scored cells available for this route.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if model.activeHourBinStart != nil {
+                rateRow(label: "Person", value: model.personRate)
+                rateRow(label: "Property", value: model.propertyRate)
+                rateRow(label: "Society", value: model.societyRate)
+                rateRow(label: "Other", value: model.otherRate)
+            }
+        }
+    }
+
+    private var hourlyChartSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Safety score by hour")
+
+            Chart(chartRows, id: \.label) { row in
+                BarMark(
+                    x: .value("Safety score", row.sum),
+                    y: .value("Time", row.label)
+                )
+                .foregroundStyle(
+                    row.isActive
+                        ? goGreen
+                        : goGreen.opacity(row.sum > 0 ? 0.45 : 0.15)
+                )
+            }
+            // First domain value sits at the bottom; reverse so midnight is at the top.
+            .chartYScale(domain: Array(timeLabelDomain.reversed()))
+            .chartXAxis {
+                AxisMarks(position: .bottom, values: .automatic(desiredCount: 4)) { _ in
+                    AxisGridLine()
+                    AxisValueLabel()
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading, values: timeLabelDomain) { value in
+                    AxisValueLabel {
+                        if let label = value.as(String.self) {
+                            Text(label)
+                                .font(.caption2)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+                    }
+                }
+            }
+            .frame(height: 182)
+        }
+    }
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.subheadline.weight(.semibold))
+    }
+
+    private func detailRow(
+        label: String,
+        value: String,
+        valueColor: Color = .primary
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(valueColor)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func rateRow(label: String, value: Double?) -> some View {
+        detailRow(
+            label: label,
+            value: value.map { String(format: "%.6g / hr", $0) } ?? "—"
+        )
+    }
+
+    static func hourBinLabel(_ binStart: Int) -> String {
+        let end = (binStart + 3) % 24
+        return "\(formattedHour(binStart)) - \(formattedHour(end))"
+    }
+
+    private static func formattedHour(_ hour: Int) -> String {
+        let h = ((hour % 24) + 24) % 24
+        let period = h < 12 ? "AM" : "PM"
+        let twelve = h % 12 == 0 ? 12 : h % 12
+        return "\(twelve) \(period)"
+    }
+}
+
+/// UIKit backdrop so taps register above `GMSMapView` (SwiftUI gestures often miss).
+private struct RouteSafetyDismissBackdrop: UIViewRepresentable {
+    let onTap: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTap: onTap)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+        view.isUserInteractionEnabled = true
+        let recognizer = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap)
+        )
+        recognizer.cancelsTouchesInView = true
+        view.addGestureRecognizer(recognizer)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onTap = onTap
+    }
+
+    final class Coordinator: NSObject {
+        var onTap: () -> Void
+
+        init(onTap: @escaping () -> Void) {
+            self.onTap = onTap
+        }
+
+        @objc func handleTap() {
+            onTap()
+        }
+    }
+}
+
+/// Dimmed full-screen host that dismisses when the outside area is tapped.
+struct RouteSafetyInformationDetailsOverlay: View {
+    let model: RouteSafetyDetailsModel
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .center) {
+            RouteSafetyDismissBackdrop(onTap: onDismiss)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+                .accessibilityLabel("Dismiss route safety details")
+                .accessibilityAddTraits(.isButton)
+
+            RouteSafetyInformationDetails(model: model)
+                .padding(.horizontal, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .ignoresSafeArea()
+        .allowsHitTesting(true)
+        .transition(.opacity)
+    }
+}

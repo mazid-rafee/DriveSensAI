@@ -258,8 +258,9 @@ final class RouteExtractionTests: XCTestCase {
                     )
                 },
                 isExtractionReady: candidate.isExtractionReady,
-                mockCrimeScore: nil,
-                safetyTier: nil
+                safetyScore: nil,
+                safetyTier: nil,
+                hasInsufficientSafetyInfo: false
             )
         }
     }

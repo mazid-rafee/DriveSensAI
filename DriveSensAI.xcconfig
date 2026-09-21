@@ -1,2 +1,10 @@
 // DriveSensAI.xcconfig
 #include? "Secrets.xcconfig"
+
+// Local CrimePredictor FastAPI base URL (not a secret).
+// Simulator talks to the Mac loopback; device builds must use the Mac LAN IP
+// with Uvicorn bound to --host 0.0.0.0 on the same Wi-Fi network.
+//
+// xcconfig URL escaping: insert an empty $( ) so "//" is preserved.
+CRIME_API_BASE_URL[sdk=iphonesimulator*] = http:/$()/127.0.0.1:8000
+CRIME_API_BASE_URL[sdk=iphoneos*] = http:/$()/192.168.4.75:8000

@@ -11,7 +11,7 @@ import GoogleNavigation
 import UIKit
 
 /// Temporary presentation colors for SHOW ROUTE polylines were replaced by
-/// `MockRouteSafetyStyle` (green / amber / red mock safety tiers).
+/// `RouteSafetyStyle` (green / amber / red safety tiers).
 
 /// Compact guidance payload published from the Navigation SDK for custom SwiftUI chrome.
 private struct NavigationDisplayInfo: Equatable {
@@ -51,6 +51,7 @@ struct NavigationView: View {
     @State private var navigationDisplayInfo = NavigationDisplayInfo.empty
     @State private var navigationCameraToggleRequestID: UUID?
     @State private var navigationMyLocationRequestID: UUID?
+    @State private var safetyDetailsRouteID: String?
 
     @FocusState private var focusedField: DirectionsSearchField?
 
@@ -146,6 +147,15 @@ struct NavigationView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        .overlay {
+            if let safetyDetailsModel {
+                RouteSafetyInformationDetailsOverlay(
+                    model: safetyDetailsModel,
+                    onDismiss: { safetyDetailsRouteID = nil }
+                )
+                .ignoresSafeArea()
+            }
+        }
         .onChange(of: focusedField) { _, newValue in
             guard session.mode != .navigation else { return }
             guard let newValue else {
@@ -265,7 +275,23 @@ struct NavigationView: View {
 
     /// Display-only ordering: safest → unsafest. Does not mutate `previewRoutes` / extraction order.
     private var safetySortedPreviewRoutes: [ComputedRoute] {
-        MockRouteRiskScorer.rankedSafestFirst(session.previewRoutes)
+        RouteRiskScorer.rankedSafestFirst(session.previewRoutes)
+    }
+
+    private var routeLoadingStatusText: String {
+        if case .loading = session.routePredictionState {
+            return "Scoring routes…"
+        }
+        return "Finding route…"
+    }
+
+    private var safetyDetailsModel: RouteSafetyDetailsModel? {
+        guard let routeID = safetyDetailsRouteID,
+              let route = session.previewRoutes.first(where: { $0.id == routeID }) else {
+            return nil
+        }
+        let prediction = session.lastRoutePredictionResponse?.routes.first(where: { $0.routeID == routeID })
+        return RouteSafetyDetailsModel.build(route: route, prediction: prediction)
     }
 
     @ViewBuilder
@@ -275,7 +301,7 @@ struct NavigationView: View {
                 HStack(spacing: 10) {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Finding route…")
+                    Text(routeLoadingStatusText)
                         .font(.subheadline.weight(.medium))
                     Spacer(minLength: 0)
                 }
@@ -287,7 +313,8 @@ struct NavigationView: View {
                         displayRank: index + 1,
                         route: route,
                         isSelected: route.id == session.selectedRouteID,
-                        onSelect: { session.selectRoute(id: route.id) }
+                        onSelect: { session.selectRoute(id: route.id) },
+                        onLongPress: { safetyDetailsRouteID = route.id }
                     )
                     .frame(maxWidth: .infinity)
                 }
@@ -381,7 +408,7 @@ struct NavigationView: View {
 
     /// Always uses the safest-route green (`#34A853`).
     private var goButtonColor: Color {
-        Color(uiColor: MockRouteSafetyStyle.baseColor(for: .safest))
+        Color(uiColor: RouteSafetyStyle.baseColor(for: .safest))
     }
 
     private var endNavigationButton: some View {
@@ -951,12 +978,12 @@ private struct GoogleMapView: UIViewRepresentable {
                     continue
                 }
                 let isSelected = route.id == selectedID
-                let tier = route.safetyTier ?? .medium
+                let tier = route.safetyTier
                 let polyline = GMSPolyline(path: path)
-                polyline.strokeWidth = MockRouteSafetyStyle.strokeWidth(isSelected: isSelected)
-                polyline.strokeColor = MockRouteSafetyStyle.strokeColor(tier: tier, isSelected: isSelected)
+                polyline.strokeWidth = RouteSafetyStyle.strokeWidth(isSelected: isSelected)
+                polyline.strokeColor = RouteSafetyStyle.strokeColor(tier: tier, isSelected: isSelected)
                 polyline.geodesic = true
-                polyline.zIndex = MockRouteSafetyStyle.zIndex(isSelected: isSelected)
+                polyline.zIndex = RouteSafetyStyle.zIndex(isSelected: isSelected)
                 polyline.isTappable = false
                 polyline.userData = route.id
                 polyline.map = mapView
@@ -996,10 +1023,10 @@ private struct GoogleMapView: UIViewRepresentable {
             for route in routes {
                 guard let polyline = previewPolylines[route.id] else { continue }
                 let isSelected = route.id == selectedID
-                let tier = route.safetyTier ?? .medium
-                polyline.strokeColor = MockRouteSafetyStyle.strokeColor(tier: tier, isSelected: isSelected)
-                polyline.strokeWidth = MockRouteSafetyStyle.strokeWidth(isSelected: isSelected)
-                polyline.zIndex = MockRouteSafetyStyle.zIndex(isSelected: isSelected)
+                let tier = route.safetyTier
+                polyline.strokeColor = RouteSafetyStyle.strokeColor(tier: tier, isSelected: isSelected)
+                polyline.strokeWidth = RouteSafetyStyle.strokeWidth(isSelected: isSelected)
+                polyline.zIndex = RouteSafetyStyle.zIndex(isSelected: isSelected)
                 polyline.isTappable = false
                 polyline.userData = route.id
             }
