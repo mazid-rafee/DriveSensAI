@@ -41,6 +41,8 @@ private struct NavigationDisplayInfo: Equatable {
 /// Navigation region backed by Google Maps / Navigation SDK.
 struct NavigationView: View {
     @Binding var speedingState: SpeedingState
+    /// Raw Navigation SDK speeding fraction for DriveView OVER LIMIT (nil = unavailable).
+    @Binding var percentageAboveLimit: CGFloat?
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -103,6 +105,9 @@ struct NavigationView: View {
                 },
                 onSpeedingStateChanged: { newState in
                     applySpeedingState(newState)
+                },
+                onSpeedingPercentageChanged: { percentage in
+                    applySpeedingPercentage(percentage)
                 }
             )
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -677,8 +682,13 @@ struct NavigationView: View {
         speedingState = newState
     }
 
+    private func applySpeedingPercentage(_ percentage: CGFloat?) {
+        percentageAboveLimit = percentage
+    }
+
     private func resetSpeedingState() {
         applySpeedingState(.unavailable)
+        applySpeedingPercentage(nil)
     }
 }
 
@@ -704,6 +714,7 @@ private struct GoogleMapView: UIViewRepresentable {
     var onNavigationInfoUpdated: (NavigationDisplayInfo) -> Void
     var onNavigationInfoCleared: () -> Void
     var onSpeedingStateChanged: (SpeedingState) -> Void
+    var onSpeedingPercentageChanged: (CGFloat?) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -780,6 +791,7 @@ private struct GoogleMapView: UIViewRepresentable {
         var onNavigationInfoUpdated: (NavigationDisplayInfo) -> Void = { _ in }
         var onNavigationInfoCleared: () -> Void = {}
         var onSpeedingStateChanged: (SpeedingState) -> Void = { _ in }
+        var onSpeedingPercentageChanged: (CGFloat?) -> Void = { _ in }
 
         private let locationManager = CLLocationManager()
         private weak var mapView: GMSMapView?
@@ -800,6 +812,7 @@ private struct GoogleMapView: UIViewRepresentable {
         private var didRegisterNavigatorListener = false
         private var lastPublishedDisplayInfo = NavigationDisplayInfo.empty
         private var lastPublishedSpeedingState: SpeedingState = .unavailable
+        private var lastPublishedSpeedingPercentage: CGFloat?
         private let distanceFormatter: MeasurementFormatter = {
             let formatter = MeasurementFormatter()
             formatter.unitStyle = .short
@@ -828,6 +841,7 @@ private struct GoogleMapView: UIViewRepresentable {
             onNavigationInfoUpdated = parent.onNavigationInfoUpdated
             onNavigationInfoCleared = parent.onNavigationInfoCleared
             onSpeedingStateChanged = parent.onSpeedingStateChanged
+            onSpeedingPercentageChanged = parent.onSpeedingPercentageChanged
         }
 
         func attach(to mapView: GMSMapView) {
@@ -874,7 +888,7 @@ private struct GoogleMapView: UIViewRepresentable {
         }
 
         /// Keeps Google's native speed-limit / speedometer controls off.
-        /// Posted limit is shown beside GPS speed in DriveView via Roads API.
+        /// OVER LIMIT beside GPS speed comes from Navigation SDK speeding % in DriveView.
         private func applySpeedLimitDisplay(enabled: Bool) {
             guard let mapView else { return }
             mapView.shouldDisplaySpeedLimit = false
@@ -1360,6 +1374,7 @@ private struct GoogleMapView: UIViewRepresentable {
             mapView.isNavigationEnabled = false
             applySpeedLimitDisplay(enabled: false)
             publishSpeedingState(.unavailable)
+            publishSpeedingPercentage(nil)
             UIApplication.shared.isIdleTimerDisabled = false
             lastFittedPairKey = nil
             isStarting = false
@@ -1457,6 +1472,20 @@ private struct GoogleMapView: UIViewRepresentable {
             lastPublishedSpeedingState = state
             let callback = onSpeedingStateChanged
             Task { @MainActor in callback(state) }
+        }
+
+        /// Publishes raw speeding fraction on every meaningful change (for OVER LIMIT MPH).
+        private func publishSpeedingPercentage(_ percentage: CGFloat?) {
+            if let last = lastPublishedSpeedingPercentage, let percentage,
+               abs(last - percentage) < 0.0001 {
+                return
+            }
+            if lastPublishedSpeedingPercentage == nil, percentage == nil {
+                return
+            }
+            lastPublishedSpeedingPercentage = percentage
+            let callback = onSpeedingPercentageChanged
+            Task { @MainActor in callback(percentage) }
         }
 
         private func speedingLabel(_ state: SpeedingState) -> String {
@@ -1632,6 +1661,7 @@ private struct GoogleMapView: UIViewRepresentable {
             case .stopped:
                 clearNavigationDisplayInfo()
                 publishSpeedingState(.unavailable)
+                publishSpeedingPercentage(nil)
             default:
                 break
             }
@@ -1647,6 +1677,7 @@ private struct GoogleMapView: UIViewRepresentable {
                 percentageAboveLimit: percentageAboveLimit
             )
             publishSpeedingState(mapped, percentage: percentageAboveLimit)
+            publishSpeedingPercentage(percentageAboveLimit)
         }
 
         func navigator(_ navigator: GMSNavigator, didArriveAt waypoint: GMSNavigationWaypoint) {
@@ -1673,7 +1704,10 @@ private enum NavigationStartupError: LocalizedError {
 }
 
 #Preview {
-    NavigationView(speedingState: .constant(.unavailable))
+    NavigationView(
+        speedingState: .constant(.unavailable),
+        percentageAboveLimit: .constant(nil)
+    )
         .frame(height: 480)
         .padding()
         .preferredColorScheme(.dark)

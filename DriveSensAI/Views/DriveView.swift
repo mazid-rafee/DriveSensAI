@@ -19,9 +19,12 @@ struct DriveView: View {
 
     /// Bridged from Google Navigation overspeed callbacks (unavailable outside guidance).
     @State private var speedingState: SpeedingState = .unavailable
+    /// Raw Navigation SDK speeding fraction; `nil` outside guidance / after reset.
+    @State private var percentageAboveLimit: CGFloat? = nil
 
     #if DEBUG
     @State private var showLaneDebugOverlay = false
+    @State private var lastOverLimitLogKey: String = ""
     #endif
 
     var body: some View {
@@ -32,7 +35,10 @@ struct DriveView: View {
                 topBar
 
                 // Map fills remaining height; telemetry stays compact so the map stays dominant.
-                NavigationView(speedingState: $speedingState)
+                NavigationView(
+                    speedingState: $speedingState,
+                    percentageAboveLimit: $percentageAboveLimit
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 lowerTelemetry
@@ -48,7 +54,7 @@ struct DriveView: View {
         .animation(.easeInOut(duration: 0.2), value: driverMonitor.attentionState)
         .animation(.easeInOut(duration: 0.2), value: roadRiskAnalyzer.state)
         .animation(.easeInOut(duration: 0.2), value: laneDetector.result.state)
-        .animation(.easeInOut(duration: 0.2), value: speedMonitor.postedSpeedLimitMPH)
+        .animation(.easeInOut(duration: 0.2), value: percentageAboveLimit)
         .animation(.easeInOut(duration: 0.2), value: speedMonitor.speedMPH)
         .animation(.easeInOut(duration: 0.2), value: warningBanner?.title)
         .onAppear {
@@ -87,9 +93,13 @@ struct DriveView: View {
         }
         .onChange(of: speedMonitor.speedMPH) { _, _ in
             syncLaneSpeedGate()
+            logOverLimitIfNeeded()
         }
         .onChange(of: speedMonitor.hasReliableSpeed) { _, _ in
             syncLaneSpeedGate()
+        }
+        .onChange(of: percentageAboveLimit) { _, _ in
+            logOverLimitIfNeeded()
         }
     }
 
@@ -109,7 +119,7 @@ struct DriveView: View {
         )
     }
 
-    /// Compact strip under the map: optional warning → speed | lane | limit → ADAS chips → footer.
+    /// Compact strip under the map: optional warning → speed | lane | over-limit → ADAS chips → footer.
     private var lowerTelemetry: some View {
         VStack(spacing: 6) {
             if let banner = warningBanner {
@@ -152,16 +162,18 @@ struct DriveView: View {
         .accessibilityLabel(multiCamOwner.isActive ? "Live" : "Camera error")
     }
 
-    // MARK: - Instrument row: speed | lane | limit (compact, centered)
+    // MARK: - Instrument row: speed | lane | over-limit (compact, centered)
 
     private let laneRoadHeight: CGFloat = 46
 
     private var instrumentClusterRow: some View {
         HStack(alignment: .center, spacing: 16) {
             speedColumn
+                .frame(maxWidth: .infinity, alignment: .trailing)
             laneAssistColumn
                 .frame(width: 64)
-            limitColumn
+            overLimitColumn
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
@@ -170,24 +182,25 @@ struct DriveView: View {
 
     private var speedColumn: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text("SPEED MPH")
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.4)
+                .foregroundStyle(.secondary)
             Text(speedDisplayText)
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(speedForeground)
-            Text("MPH")
-                .font(.system(size: 10, weight: .bold))
-                .tracking(0.4)
-                .foregroundStyle(.secondary)
         }
     }
 
-    private var limitColumn: some View {
+    /// Right column — same horizontal layout as former LIMIT; shows MPH over posted limit.
+    private var overLimitColumn: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(speedLimitDisplayText)
+            Text(overLimitDisplayText)
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.primary.opacity(0.92))
-            Text("LIMIT")
+            Text("OVER LIMIT")
                 .font(.system(size: 10, weight: .bold))
                 .tracking(0.4)
                 .foregroundStyle(.secondary)
@@ -218,22 +231,28 @@ struct DriveView: View {
         return "\(Int(mph.rounded()))"
     }
 
-    private var speedLimitDisplayText: String {
-        guard let limit = speedMonitor.postedSpeedLimitMPH, limit > 0 else {
+    /// Whole MPH over the posted limit from Nav SDK percentage + GPS speed.
+    /// `p > 0` → `S * p / (1 + p)`; `p == 0` → `0`; `p < 0` / missing → `--`.
+    private var overLimitDisplayText: String {
+        guard let p = percentageAboveLimit else { return "--" }
+        if p < 0 { return "--" }
+        if p == 0 { return "0" }
+        guard speedMonitor.hasReliableSpeed, let speed = speedMonitor.speedMPH else {
             return "--"
         }
-        return "\(limit)"
+        let over = speed * Double(p) / (1.0 + Double(p))
+        return "\(Int(over.rounded()))"
     }
 
-    /// Current speed only: deeper red as MPH exceeds the posted Google limit.
+    /// Current speed only: deeper red as MPH over the limit increases.
     private var speedForeground: Color {
         guard speedMonitor.hasReliableSpeed,
               let mph = speedMonitor.speedMPH,
-              let limit = speedMonitor.postedSpeedLimitMPH,
-              limit > 0 else {
+              let p = percentageAboveLimit,
+              p > 0 else {
             return .primary
         }
-        let over = mph - Double(limit)
+        let over = mph * Double(p) / (1.0 + Double(p))
         guard over > 0 else { return .primary }
 
         // 0 mph over → soft red; ≥20 mph over → deep crimson.
@@ -252,10 +271,58 @@ struct DriveView: View {
         } else {
             speedPart = "Speed unavailable"
         }
-        if let limit = speedMonitor.postedSpeedLimitMPH, limit > 0 {
-            return "\(speedPart), limit \(limit)"
+        switch overLimitDisplayText {
+        case "--":
+            return "\(speedPart), over limit unavailable"
+        case "0":
+            return "\(speedPart), not over limit"
+        default:
+            return "\(speedPart), \(overLimitDisplayText) over limit"
         }
-        return "\(speedPart), limit unavailable"
+    }
+
+    private func logOverLimitIfNeeded() {
+        #if DEBUG
+        guard let p = percentageAboveLimit else {
+            let key = "nil"
+            guard key != lastOverLimitLogKey else { return }
+            lastOverLimitLogKey = key
+            print("[OverLimit] percentage unavailable")
+            return
+        }
+        if p < 0 {
+            let key = "neg"
+            guard key != lastOverLimitLogKey else { return }
+            lastOverLimitLogKey = key
+            print("[OverLimit] percentage=-1 unavailable")
+            return
+        }
+        let speed = speedMonitor.hasReliableSpeed ? speedMonitor.speedMPH : nil
+        let overText: String
+        if p == 0 {
+            overText = "0"
+        } else if let speed {
+            overText = "\(Int((speed * Double(p) / (1.0 + Double(p))).rounded()))"
+        } else {
+            overText = "n/a"
+        }
+        let speedText = speed.map { String(format: "%.1f", $0) } ?? "n/a"
+        let key = "\(speedText)|\(String(format: "%.4f", Double(p)))|\(overText)"
+        guard key != lastOverLimitLogKey else { return }
+        lastOverLimitLogKey = key
+        if p == 0 {
+            print("[OverLimit] speedMPH=\(speedText) percentage=0.0 overMPH=0")
+        } else {
+            print(
+                String(
+                    format: "[OverLimit] speedMPH=%@ percentage=%.4f overMPH=%@",
+                    speedText,
+                    Double(p),
+                    overText
+                )
+            )
+        }
+        #endif
     }
 
     // MARK: - Expandable ADAS status row

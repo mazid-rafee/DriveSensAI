@@ -7,13 +7,14 @@ import Combine
 import CoreLocation
 import Foundation
 
-/// Publishes smoothed GPS vehicle speed + Google Roads posted limit (MPH).
+/// Publishes smoothed GPS vehicle speed (MPH).
 /// Uses its own CLLocationManager; does not share Maps / Places / Navigation managers.
+/// Roads API posted-limit polling is disabled — OVER LIMIT UI uses Navigation SDK speeding %.
 @MainActor
 final class SpeedMonitor: NSObject, ObservableObject {
     @Published private(set) var speedMPH: Double?
     @Published private(set) var hasReliableSpeed = false
-    /// Posted limit from Google Roads `speedLimits` (MPH). `nil` when unknown / unavailable.
+    /// Legacy Roads posted limit (unused by UI). Kept for now; no longer polled.
     @Published private(set) var postedSpeedLimitMPH: Int?
 
     // MARK: - Experimental tuning
@@ -124,7 +125,7 @@ final class SpeedMonitor: NSObject, ObservableObject {
 
     /// Validates and smooths a location fix. Used by live GPS and DEBUG injection.
     private func processLocation(_ location: CLLocation) {
-        ingestPathSample(location)
+        // Roads API speedLimits path sampling intentionally disabled (OVER LIMIT uses Nav SDK).
 
         switch validate(location) {
         case .rejected(let reason):
