@@ -10,22 +10,27 @@ struct DriveView: View {
     @StateObject private var driverMonitor = DriverMonitor()
     @StateObject private var roadDetector = RoadDetectionService()
     @StateObject private var roadRiskAnalyzer = RoadRiskAnalyzer()
+    @StateObject private var speedMonitor = SpeedMonitor()
+    @StateObject private var alertManager = ADASAlertManager()
 
     /// Stable owner for the non-Observable MultiCamManager + published UI status.
     @StateObject private var multiCamOwner = MultiCamSessionOwner()
+
+    /// Bridged from Google Navigation overspeed callbacks (unavailable outside guidance).
+    @State private var speedingState: SpeedingState = .unavailable
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 topBar
 
-                // Fills remaining space; lower chrome is fixed-height so the map does not resize.
-                NavigationView()
+                // Map fills remaining height; telemetry stays compact so the map stays dominant.
+                NavigationView(speedingState: $speedingState)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                lowerControls
+                lowerTelemetry
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 16)
@@ -37,40 +42,59 @@ struct DriveView: View {
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: driverMonitor.attentionState)
         .animation(.easeInOut(duration: 0.2), value: roadRiskAnalyzer.state)
+        .animation(.easeInOut(duration: 0.2), value: speedingState)
+        .animation(.easeInOut(duration: 0.2), value: warningBanner?.title)
         .onAppear {
             startMultiCamIfNeeded()
+            speedMonitor.start()
+            alertManager.start()
+            syncADASAlerts()
         }
         .onDisappear {
+            alertManager.stop()
             stopMultiCam()
+            speedMonitor.stop()
         }
         .onReceive(roadDetector.$detections) { detections in
             roadRiskAnalyzer.update(
                 detections: detections,
                 timestamp: ProcessInfo.processInfo.systemUptime
             )
+            syncADASAlerts()
         }
         .onChange(of: roadDetector.isModelReady) { _, ready in
             if !ready {
                 roadRiskAnalyzer.reset()
             }
+            syncADASAlerts()
+        }
+        .onChange(of: driverMonitor.attentionState) { _, _ in
+            syncADASAlerts()
+        }
+        .onChange(of: roadRiskAnalyzer.state) { _, _ in
+            syncADASAlerts()
         }
     }
 
-    /// Compact chrome under the map. Banner slot is always reserved so NavigationView height stays stable.
-    private var lowerControls: some View {
+    /// Feeds centralized alert manager from explicit state changes only.
+    private func syncADASAlerts() {
+        alertManager.update(
+            driverAttention: driverMonitor.attentionState,
+            roadRisk: roadRiskAnalyzer.state
+        )
+    }
+
+    /// Compact strip under the map: optional warning → centered speed → ADAS chips → footer.
+    private var lowerTelemetry: some View {
         VStack(spacing: 6) {
-            ZStack {
-                if let banner = warningBanner {
-                    WarningBannerView(title: banner.title, style: banner.style)
-                        .transition(.opacity)
-                }
+            if let banner = warningBanner {
+                WarningBannerView(title: banner.title, style: banner.style)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .frame(height: 40)
-            .clipped()
 
-            speedInstrument
+            speedInstrumentCluster
 
-            bottomStatusPanel
+            adasStatusRow
 
             onDeviceFooter
         }
@@ -103,45 +127,93 @@ struct DriveView: View {
         .accessibilityLabel(multiCamOwner.isActive ? "Live" : "Camera error")
     }
 
-    // MARK: - Speed (placeholder — no Core Location yet)
+    // MARK: - Centered speed instrument cluster (real GPS only)
+    // Posted numeric speed limit is not exposed by Navigation SDK → Google’s native
+    // map indicator remains the only speed-limit UI when guidance is active.
 
-    private var speedInstrument: some View {
-        VStack(spacing: 1) {
-            Text("--")
-                .font(.system(size: 44, weight: .semibold, design: .rounded))
+    private var speedInstrumentCluster: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(speedDisplayText)
+                .font(.system(size: 36, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(.primary)
+                .foregroundStyle(speedForeground)
 
             Text("MPH")
-                .font(.caption.weight(.semibold))
-                .tracking(1.2)
+                .font(.system(size: 13, weight: .semibold))
+                .tracking(0.8)
                 .foregroundStyle(.secondary)
-
-            Text("SPEED LIMIT --")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Speed unavailable. Speed limit unavailable.")
+        .accessibilityLabel(speedAccessibilityLabel)
     }
 
-    // MARK: - Bottom status
+    private var speedDisplayText: String {
+        guard speedMonitor.hasReliableSpeed, let mph = speedMonitor.speedMPH else {
+            return "--"
+        }
+        return "\(Int(mph.rounded()))"
+    }
 
-    private var bottomStatusPanel: some View {
-        HStack(spacing: 8) {
-            StatusItemView(
+    private var speedForeground: Color {
+        switch speedingState {
+        case .major:
+            return .red
+        case .minor:
+            return .orange
+        case .unavailable, .normal:
+            return .primary
+        }
+    }
+
+    private var speedAccessibilityLabel: String {
+        if speedMonitor.hasReliableSpeed, let mph = speedMonitor.speedMPH {
+            return "\(Int(mph.rounded())) miles per hour"
+        }
+        return "Speed unavailable"
+    }
+
+    // MARK: - Expandable ADAS status row
+
+    /// Currently shows DRIVER + ROAD. Additional chips (lane, side, …) can append here later.
+    private var adasStatusRow: some View {
+        HStack(spacing: 6) {
+            ForEach(adasItems) { item in
+                ADASStatusItem(
+                    icon: item.icon,
+                    title: item.title,
+                    status: item.status,
+                    tone: item.tone
+                )
+            }
+        }
+    }
+
+    private struct ADASItemModel: Identifiable {
+        let id: String
+        let icon: String
+        let title: String
+        let status: String
+        let tone: ADASStatusItem.Tone
+    }
+
+    private var adasItems: [ADASItemModel] {
+        [
+            ADASItemModel(
+                id: "driver",
+                icon: "person.fill",
                 title: "DRIVER",
-                value: driverDisplayText,
+                status: driverDisplayText,
                 tone: driverTone
-            )
-
-            StatusItemView(
+            ),
+            ADASItemModel(
+                id: "road",
+                icon: "car.fill",
                 title: "ROAD",
-                value: roadDisplayText,
+                status: roadDisplayText,
                 tone: roadTone
             )
-        }
+        ]
     }
 
     private var onDeviceFooter: some View {
@@ -168,7 +240,7 @@ struct DriveView: View {
         }
     }
 
-    private var driverTone: StatusItemView.Tone {
+    private var driverTone: ADASStatusItem.Tone {
         switch driverMonitor.attentionState {
         case .attentive:
             return .normal
@@ -197,7 +269,7 @@ struct DriveView: View {
         }
     }
 
-    private var roadTone: StatusItemView.Tone {
+    private var roadTone: ADASStatusItem.Tone {
         if !roadDetector.isModelReady || roadDetector.state == .modelUnavailable {
             return .caution
         }
@@ -211,21 +283,26 @@ struct DriveView: View {
         }
     }
 
-    /// Priority: HIGH road risk > looking away > no face.
+    /// Priority: HIGH road risk > looking away > major speeding > no face.
     private var warningBanner: (title: String, style: WarningBannerView.Style)? {
         if roadDetector.isModelReady,
            roadRiskAnalyzer.state == .high {
             return ("VEHICLE CLOSING", .critical)
         }
 
-        switch driverMonitor.attentionState {
-        case .lookingAway:
+        if driverMonitor.attentionState == .lookingAway {
             return ("WATCH THE ROAD", .urgent)
-        case .noFace:
-            return ("Driver not detected", .caution)
-        case .attentive:
-            return nil
         }
+
+        if speedingState == .major {
+            return ("SLOW DOWN", .urgent)
+        }
+
+        if driverMonitor.attentionState == .noFace {
+            return ("Driver not detected", .caution)
+        }
+
+        return nil
     }
 
     // MARK: - MultiCam lifecycle (unchanged behavior)
