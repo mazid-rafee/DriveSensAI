@@ -10,6 +10,7 @@ struct DriveView: View {
     @StateObject private var driverMonitor = DriverMonitor()
     @StateObject private var roadDetector = RoadDetectionService()
     @StateObject private var roadRiskAnalyzer = RoadRiskAnalyzer()
+    @StateObject private var pedestrianRiskAnalyzer = PedestrianRiskAnalyzer()
     @StateObject private var speedMonitor = SpeedMonitor()
     @StateObject private var laneDetector = LaneDetectionService()
     @StateObject private var alertManager = ADASAlertManager()
@@ -25,6 +26,7 @@ struct DriveView: View {
     #if DEBUG
     @State private var showLaneDebugOverlay = false
     @State private var lastOverLimitLogKey: String = ""
+    @State private var lastRoadDisplayLog: String = ""
     #endif
 
     var body: some View {
@@ -52,7 +54,7 @@ struct DriveView: View {
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: driverMonitor.attentionState)
-        .animation(.easeInOut(duration: 0.2), value: roadRiskAnalyzer.state)
+        .animation(.easeInOut(duration: 0.2), value: unifiedRoadDisplay)
         .animation(.easeInOut(duration: 0.2), value: laneDetector.result.state)
         .animation(.easeInOut(duration: 0.2), value: percentageAboveLimit)
         .animation(.easeInOut(duration: 0.2), value: speedMonitor.speedMPH)
@@ -70,15 +72,16 @@ struct DriveView: View {
             speedMonitor.stop()
         }
         .onReceive(roadDetector.$detections) { detections in
-            roadRiskAnalyzer.update(
-                detections: detections,
-                timestamp: ProcessInfo.processInfo.systemUptime
-            )
+            let timestamp = ProcessInfo.processInfo.systemUptime
+            roadRiskAnalyzer.update(detections: detections, timestamp: timestamp)
+            pedestrianRiskAnalyzer.update(detections: detections, timestamp: timestamp)
+            logUnifiedRoadDisplayIfNeeded()
             syncADASAlerts()
         }
         .onChange(of: roadDetector.isModelReady) { _, ready in
             if !ready {
                 roadRiskAnalyzer.reset()
+                pedestrianRiskAnalyzer.reset()
             }
             syncADASAlerts()
         }
@@ -86,6 +89,11 @@ struct DriveView: View {
             syncADASAlerts()
         }
         .onChange(of: roadRiskAnalyzer.state) { _, _ in
+            logUnifiedRoadDisplayIfNeeded()
+            syncADASAlerts()
+        }
+        .onChange(of: pedestrianRiskAnalyzer.state) { _, _ in
+            logUnifiedRoadDisplayIfNeeded()
             syncADASAlerts()
         }
         .onChange(of: laneDetector.result.state) { _, _ in
@@ -108,6 +116,7 @@ struct DriveView: View {
         alertManager.update(
             driverAttention: driverMonitor.attentionState,
             roadRisk: roadRiskAnalyzer.state,
+            pedestrianRisk: pedestrianRiskAnalyzer.state,
             laneAssist: laneDetector.result.state
         )
     }
@@ -337,7 +346,7 @@ struct DriveView: View {
                 tone: driverTone
             )
             ADASStatusItem(
-                icon: "car.fill",
+                icon: unifiedRoadDisplay.iconName,
                 title: "ROAD",
                 status: roadDisplayText,
                 tone: roadTone
@@ -357,6 +366,16 @@ struct DriveView: View {
     }
 
     // MARK: - Display mapping (UI only)
+
+    /// Single ROAD presentation — both analyzers stay active; only display is prioritized.
+    private var unifiedRoadDisplay: UnifiedRoadDisplayState {
+        UnifiedRoadDisplayState.resolve(
+            modelReady: roadDetector.isModelReady,
+            modelUnavailable: roadDetector.state == .modelUnavailable,
+            vehicle: roadRiskAnalyzer.state,
+            pedestrian: pedestrianRiskAnalyzer.state
+        )
+    }
 
     private var driverDisplayText: String {
         switch driverMonitor.attentionState {
@@ -381,42 +400,32 @@ struct DriveView: View {
     }
 
     private var roadDisplayText: String {
-        if !roadDetector.isModelReady || roadDetector.state == .modelUnavailable {
-            return "Road monitoring unavailable"
-        }
-
-        // Experimental forward closing-risk estimation (not validated FCW).
-        switch roadRiskAnalyzer.state {
-        case .clear:
-            return "Clear"
-        case .monitoring:
-            return "Vehicle ahead"
-        case .caution:
-            return "Closing vehicle"
-        case .high:
-            return "Rapid closing"
-        }
+        unifiedRoadDisplay.statusText
     }
 
     private var roadTone: ADASStatusItem.Tone {
-        if !roadDetector.isModelReady || roadDetector.state == .modelUnavailable {
+        switch unifiedRoadDisplay {
+        case .unavailable:
             return .caution
-        }
-        switch roadRiskAnalyzer.state {
-        case .clear, .monitoring:
+        case .clear, .vehicleAhead, .pedestrianAhead:
             return .normal
-        case .caution:
+        case .closingVehicle:
             return .caution
-        case .high:
+        case .rapidClosing, .pedestrianClose:
             return .urgent
         }
     }
 
-    /// Priority: HIGH road risk > lane drift (speed-gated) > looking away > major speeding > no face.
+    /// Priority: Pedestrian Close! > Rapid closing > lane drift > looking away > major speeding > no face.
+    /// Closing vehicle has no dedicated banner (existing behavior preserved).
     private var warningBanner: (title: String, style: WarningBannerView.Style)? {
-        if roadDetector.isModelReady,
-           roadRiskAnalyzer.state == .high {
-            return ("VEHICLE CLOSING", .critical)
+        if roadDetector.isModelReady {
+            if pedestrianRiskAnalyzer.state == .close {
+                return ("PEDESTRIAN CLOSE!", .critical)
+            }
+            if roadRiskAnalyzer.state == .high {
+                return ("VEHICLE CLOSING", .critical)
+            }
         }
 
         switch laneDetector.result.state {
@@ -441,6 +450,17 @@ struct DriveView: View {
         }
 
         return nil
+    }
+
+    private func logUnifiedRoadDisplayIfNeeded() {
+        #if DEBUG
+        let text = unifiedRoadDisplay.statusText
+        guard text != lastRoadDisplayLog else { return }
+        if !lastRoadDisplayLog.isEmpty {
+            print("[RoadDisplay] \(lastRoadDisplayLog) -> \(text)")
+        }
+        lastRoadDisplayLog = text
+        #endif
     }
 
     // MARK: - MultiCam lifecycle (unchanged behavior)
@@ -476,6 +496,7 @@ struct DriveView: View {
                 roadDetector.endExternalFrameProcessing()
                 laneDetector.endExternalFrameProcessing()
                 roadRiskAnalyzer.reset()
+                pedestrianRiskAnalyzer.reset()
                 // Allow a later onAppear retry after a failed start.
                 multiCamOwner.hasStarted = false
             }
@@ -491,6 +512,7 @@ struct DriveView: View {
         roadDetector.endExternalFrameProcessing()
         laneDetector.endExternalFrameProcessing()
         roadRiskAnalyzer.reset()
+        pedestrianRiskAnalyzer.reset()
 
         multiCamOwner.manager.stop {
             multiCamOwner.isActive = false

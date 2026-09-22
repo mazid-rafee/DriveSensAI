@@ -46,6 +46,8 @@ final class ADASAlertManager: ObservableObject {
         case driverLookingAway
         case laneDeparture
         case roadHigh
+        /// Pedestrian Close! — highest road-risk alert priority.
+        case pedestrianClose
     }
 
     private enum ToneKind {
@@ -56,6 +58,7 @@ final class ADASAlertManager: ObservableObject {
     private var activeKind: ActiveKind = .none
     private var previousDriver: DriverAttentionState?
     private var previousRoad: RoadRiskState?
+    private var previousPedestrian: PedestrianRiskState?
     private var previousLane: LaneAssistState?
 
     private var repeatTimer: Timer?
@@ -82,6 +85,7 @@ final class ADASAlertManager: ObservableObject {
         mediumImpact.prepare()
         previousDriver = nil
         previousRoad = nil
+        previousPedestrian = nil
         previousLane = nil
         activeKind = .none
         toneEngine.start { [weak self] in
@@ -98,20 +102,28 @@ final class ADASAlertManager: ObservableObject {
         toneEngine.stop()
         previousDriver = nil
         previousRoad = nil
+        previousPedestrian = nil
         previousLane = nil
     }
 
-    /// Call when driver attention, road-risk, or lane-assist state may have changed.
+    /// Call when driver / vehicle / pedestrian / lane ADAS state may have changed.
     func update(
         driverAttention: DriverAttentionState,
         roadRisk: RoadRiskState,
+        pedestrianRisk: PedestrianRiskState = .clear,
         laneAssist: LaneAssistState
     ) {
         guard isRunning else { return }
 
-        let next = resolveActiveKind(driver: driverAttention, road: roadRisk, lane: laneAssist)
+        let next = resolveActiveKind(
+            driver: driverAttention,
+            road: roadRisk,
+            pedestrian: pedestrianRisk,
+            lane: laneAssist
+        )
         previousDriver = driverAttention
         previousRoad = roadRisk
+        previousPedestrian = pedestrianRisk
         previousLane = laneAssist
 
         // Before the engine is ready: accept state, keep only the current
@@ -132,11 +144,17 @@ final class ADASAlertManager: ObservableObject {
 
         guard let driver = previousDriver,
               let road = previousRoad,
+              let pedestrian = previousPedestrian,
               let lane = previousLane else {
             activeKind = .none
             return
         }
-        let next = resolveActiveKind(driver: driver, road: road, lane: lane)
+        let next = resolveActiveKind(
+            driver: driver,
+            road: road,
+            pedestrian: pedestrian,
+            lane: lane
+        )
         if next == .none {
             activeKind = .none
             return
@@ -145,13 +163,17 @@ final class ADASAlertManager: ObservableObject {
     }
 
     // MARK: - Resolution
-    // Priority: HIGH > lane departure > lookingAway > caution > noFace > none
+    // Priority: pedestrianClose > road HIGH > lane departure > lookingAway > caution > noFace > none
 
     private func resolveActiveKind(
         driver: DriverAttentionState,
         road: RoadRiskState,
+        pedestrian: PedestrianRiskState,
         lane: LaneAssistState
     ) -> ActiveKind {
+        if pedestrian == .close {
+            return .pedestrianClose
+        }
         if road == .high {
             return .roadHigh
         }
@@ -210,6 +232,12 @@ final class ADASAlertManager: ObservableObject {
             #endif
             playHighAlertBurst()
             startRepeatTimer(interval: Self.highRepeatInterval)
+        case .pedestrianClose:
+            #if DEBUG
+            print("[ADASAudio] play pedestrianClose")
+            #endif
+            playHighAlertBurst()
+            startRepeatTimer(interval: Self.highRepeatInterval)
         }
     }
 
@@ -247,6 +275,11 @@ final class ADASAlertManager: ObservableObject {
         case .roadHigh:
             #if DEBUG
             print("[ADASAudio] play high")
+            #endif
+            playHighAlertBurst()
+        case .pedestrianClose:
+            #if DEBUG
+            print("[ADASAudio] play pedestrianClose")
             #endif
             playHighAlertBurst()
         }
