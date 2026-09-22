@@ -873,18 +873,13 @@ private struct GoogleMapView: UIViewRepresentable {
             #endif
         }
 
-        /// Shows Google's native posted speed-limit control only during active guidance.
+        /// Keeps Google's native speed-limit / speedometer controls off.
+        /// Posted limit is shown beside GPS speed in DriveView via Roads API.
         private func applySpeedLimitDisplay(enabled: Bool) {
             guard let mapView else { return }
-            let wasEnabled = mapView.shouldDisplaySpeedLimit
-            mapView.shouldDisplaySpeedLimit = enabled
-            // Keep Google's speedometer off — DriveView owns current MPH display.
+            mapView.shouldDisplaySpeedLimit = false
             mapView.shouldDisplaySpeedometer = false
-            #if DEBUG
-            if enabled && !wasEnabled {
-                print("[SpeedLimit] navigation speed-limit display enabled")
-            }
-            #endif
+            _ = enabled
         }
 
         private func setPreviewPolylinesVisible(_ visible: Bool) {

@@ -11,6 +11,7 @@ struct DriveView: View {
     @StateObject private var roadDetector = RoadDetectionService()
     @StateObject private var roadRiskAnalyzer = RoadRiskAnalyzer()
     @StateObject private var speedMonitor = SpeedMonitor()
+    @StateObject private var laneDetector = LaneDetectionService()
     @StateObject private var alertManager = ADASAlertManager()
 
     /// Stable owner for the non-Observable MultiCamManager + published UI status.
@@ -18,6 +19,10 @@ struct DriveView: View {
 
     /// Bridged from Google Navigation overspeed callbacks (unavailable outside guidance).
     @State private var speedingState: SpeedingState = .unavailable
+
+    #if DEBUG
+    @State private var showLaneDebugOverlay = false
+    #endif
 
     var body: some View {
         ZStack {
@@ -42,12 +47,15 @@ struct DriveView: View {
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: driverMonitor.attentionState)
         .animation(.easeInOut(duration: 0.2), value: roadRiskAnalyzer.state)
-        .animation(.easeInOut(duration: 0.2), value: speedingState)
+        .animation(.easeInOut(duration: 0.2), value: laneDetector.result.state)
+        .animation(.easeInOut(duration: 0.2), value: speedMonitor.postedSpeedLimitMPH)
+        .animation(.easeInOut(duration: 0.2), value: speedMonitor.speedMPH)
         .animation(.easeInOut(duration: 0.2), value: warningBanner?.title)
         .onAppear {
             startMultiCamIfNeeded()
             speedMonitor.start()
             alertManager.start()
+            syncLaneSpeedGate()
             syncADASAlerts()
         }
         .onDisappear {
@@ -74,17 +82,34 @@ struct DriveView: View {
         .onChange(of: roadRiskAnalyzer.state) { _, _ in
             syncADASAlerts()
         }
+        .onChange(of: laneDetector.result.state) { _, _ in
+            syncADASAlerts()
+        }
+        .onChange(of: speedMonitor.speedMPH) { _, _ in
+            syncLaneSpeedGate()
+        }
+        .onChange(of: speedMonitor.hasReliableSpeed) { _, _ in
+            syncLaneSpeedGate()
+        }
     }
 
     /// Feeds centralized alert manager from explicit state changes only.
     private func syncADASAlerts() {
         alertManager.update(
             driverAttention: driverMonitor.attentionState,
-            roadRisk: roadRiskAnalyzer.state
+            roadRisk: roadRiskAnalyzer.state,
+            laneAssist: laneDetector.result.state
         )
     }
 
-    /// Compact strip under the map: optional warning → centered speed → ADAS chips → footer.
+    private func syncLaneSpeedGate() {
+        laneDetector.updateSpeed(
+            mph: speedMonitor.speedMPH,
+            reliable: speedMonitor.hasReliableSpeed
+        )
+    }
+
+    /// Compact strip under the map: optional warning → speed | lane | limit → ADAS chips → footer.
     private var lowerTelemetry: some View {
         VStack(spacing: 6) {
             if let banner = warningBanner {
@@ -92,7 +117,7 @@ struct DriveView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            speedInstrumentCluster
+            instrumentClusterRow
 
             adasStatusRow
 
@@ -127,25 +152,63 @@ struct DriveView: View {
         .accessibilityLabel(multiCamOwner.isActive ? "Live" : "Camera error")
     }
 
-    // MARK: - Centered speed instrument cluster (real GPS only)
-    // Posted numeric speed limit is not exposed by Navigation SDK → Google’s native
-    // map indicator remains the only speed-limit UI when guidance is active.
+    // MARK: - Instrument row: speed | lane | limit (compact, centered)
 
-    private var speedInstrumentCluster: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(speedDisplayText)
-                .font(.system(size: 36, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(speedForeground)
+    private let laneRoadHeight: CGFloat = 46
 
-            Text("MPH")
-                .font(.system(size: 13, weight: .semibold))
-                .tracking(0.8)
-                .foregroundStyle(.secondary)
+    private var instrumentClusterRow: some View {
+        HStack(alignment: .center, spacing: 16) {
+            speedColumn
+            laneAssistColumn
+                .frame(width: 64)
+            limitColumn
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(speedAccessibilityLabel)
+    }
+
+    private var speedColumn: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(speedDisplayText)
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(speedForeground)
+            Text("MPH")
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.4)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var limitColumn: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(speedLimitDisplayText)
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary.opacity(0.92))
+            Text("LIMIT")
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.4)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var laneAssistColumn: some View {
+        #if DEBUG
+        LaneAssistView(
+            result: laneDetector.result,
+            roadHeight: laneRoadHeight,
+            debugSnapshot: laneDetector.debugSnapshot,
+            showDebugOverlay: showLaneDebugOverlay
+        )
+        .onLongPressGesture(minimumDuration: 0.6) {
+            showLaneDebugOverlay.toggle()
+        }
+        #else
+        LaneAssistView(result: laneDetector.result, roadHeight: laneRoadHeight)
+        #endif
     }
 
     private var speedDisplayText: String {
@@ -155,65 +218,64 @@ struct DriveView: View {
         return "\(Int(mph.rounded()))"
     }
 
+    private var speedLimitDisplayText: String {
+        guard let limit = speedMonitor.postedSpeedLimitMPH, limit > 0 else {
+            return "--"
+        }
+        return "\(limit)"
+    }
+
+    /// Current speed only: deeper red as MPH exceeds the posted Google limit.
     private var speedForeground: Color {
-        switch speedingState {
-        case .major:
-            return .red
-        case .minor:
-            return .orange
-        case .unavailable, .normal:
+        guard speedMonitor.hasReliableSpeed,
+              let mph = speedMonitor.speedMPH,
+              let limit = speedMonitor.postedSpeedLimitMPH,
+              limit > 0 else {
             return .primary
         }
+        let over = mph - Double(limit)
+        guard over > 0 else { return .primary }
+
+        // 0 mph over → soft red; ≥20 mph over → deep crimson.
+        let t = min(1.0, over / 20.0)
+        return Color(
+            red: 0.92 - 0.22 * t,
+            green: 0.28 - 0.24 * t,
+            blue: 0.22 - 0.16 * t
+        )
     }
 
     private var speedAccessibilityLabel: String {
+        let speedPart: String
         if speedMonitor.hasReliableSpeed, let mph = speedMonitor.speedMPH {
-            return "\(Int(mph.rounded())) miles per hour"
+            speedPart = "\(Int(mph.rounded())) miles per hour"
+        } else {
+            speedPart = "Speed unavailable"
         }
-        return "Speed unavailable"
+        if let limit = speedMonitor.postedSpeedLimitMPH, limit > 0 {
+            return "\(speedPart), limit \(limit)"
+        }
+        return "\(speedPart), limit unavailable"
     }
 
     // MARK: - Expandable ADAS status row
 
-    /// Currently shows DRIVER + ROAD. Additional chips (lane, side, …) can append here later.
+    /// DRIVER + ROAD status chips.
     private var adasStatusRow: some View {
         HStack(spacing: 6) {
-            ForEach(adasItems) { item in
-                ADASStatusItem(
-                    icon: item.icon,
-                    title: item.title,
-                    status: item.status,
-                    tone: item.tone
-                )
-            }
-        }
-    }
-
-    private struct ADASItemModel: Identifiable {
-        let id: String
-        let icon: String
-        let title: String
-        let status: String
-        let tone: ADASStatusItem.Tone
-    }
-
-    private var adasItems: [ADASItemModel] {
-        [
-            ADASItemModel(
-                id: "driver",
+            ADASStatusItem(
                 icon: "person.fill",
                 title: "DRIVER",
                 status: driverDisplayText,
                 tone: driverTone
-            ),
-            ADASItemModel(
-                id: "road",
+            )
+            ADASStatusItem(
                 icon: "car.fill",
                 title: "ROAD",
                 status: roadDisplayText,
                 tone: roadTone
             )
-        ]
+        }
     }
 
     private var onDeviceFooter: some View {
@@ -283,11 +345,20 @@ struct DriveView: View {
         }
     }
 
-    /// Priority: HIGH road risk > looking away > major speeding > no face.
+    /// Priority: HIGH road risk > lane drift (speed-gated) > looking away > major speeding > no face.
     private var warningBanner: (title: String, style: WarningBannerView.Style)? {
         if roadDetector.isModelReady,
            roadRiskAnalyzer.state == .high {
             return ("VEHICLE CLOSING", .critical)
+        }
+
+        switch laneDetector.result.state {
+        case .driftingLeft:
+            return ("LANE DRIFT LEFT", .urgent)
+        case .driftingRight:
+            return ("LANE DRIFT RIGHT", .urgent)
+        case .unavailable, .tracking:
+            break
         }
 
         if driverMonitor.attentionState == .lookingAway {
@@ -315,13 +386,15 @@ struct DriveView: View {
         // External processing only — do NOT call legacy CameraManager start APIs.
         driverMonitor.beginExternalFrameProcessing()
         roadDetector.beginExternalFrameProcessing()
+        laneDetector.beginExternalFrameProcessing()
 
         let manager = multiCamOwner.manager
         manager.onFrontFrame = { [weak driverMonitor] pixelBuffer in
             driverMonitor?.processExternalFrame(pixelBuffer)
         }
-        manager.onRearFrame = { [weak roadDetector] pixelBuffer in
+        manager.onRearFrame = { [weak roadDetector, weak laneDetector] pixelBuffer in
             roadDetector?.processExternalFrame(pixelBuffer)
+            laneDetector?.processExternalFrame(pixelBuffer)
         }
 
         manager.requestAccessAndStart { result in
@@ -334,6 +407,7 @@ struct DriveView: View {
                 multiCamOwner.errorMessage = error.localizedDescription
                 driverMonitor.endExternalFrameProcessing()
                 roadDetector.endExternalFrameProcessing()
+                laneDetector.endExternalFrameProcessing()
                 roadRiskAnalyzer.reset()
                 // Allow a later onAppear retry after a failed start.
                 multiCamOwner.hasStarted = false
@@ -348,6 +422,7 @@ struct DriveView: View {
         multiCamOwner.manager.onRearFrame = nil
         driverMonitor.endExternalFrameProcessing()
         roadDetector.endExternalFrameProcessing()
+        laneDetector.endExternalFrameProcessing()
         roadRiskAnalyzer.reset()
 
         multiCamOwner.manager.stop {

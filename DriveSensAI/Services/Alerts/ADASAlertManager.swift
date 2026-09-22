@@ -28,7 +28,7 @@ enum ADASAlertPriority: Int, Comparable {
     }
 }
 
-/// Owns beep patterns, HIGH haptic, and repeating cadence for driver / road ADAS states.
+/// Owns beep patterns, HIGH haptic, and repeating cadence for driver / road / lane ADAS states.
 @MainActor
 final class ADASAlertManager: ObservableObject {
     // MARK: - Cadence (seconds)
@@ -36,6 +36,7 @@ final class ADASAlertManager: ObservableObject {
     private static let noFaceRepeatInterval: TimeInterval = 4.5
     private static let cautionRepeatInterval: TimeInterval = 3.0
     private static let lookingAwayRepeatInterval: TimeInterval = 2.5
+    private static let laneDepartureRepeatInterval: TimeInterval = 2.5
     private static let highRepeatInterval: TimeInterval = 1.25
 
     private enum ActiveKind: Equatable {
@@ -43,6 +44,7 @@ final class ADASAlertManager: ObservableObject {
         case driverNoFace
         case roadCaution
         case driverLookingAway
+        case laneDeparture
         case roadHigh
     }
 
@@ -54,13 +56,15 @@ final class ADASAlertManager: ObservableObject {
     private var activeKind: ActiveKind = .none
     private var previousDriver: DriverAttentionState?
     private var previousRoad: RoadRiskState?
+    private var previousLane: LaneAssistState?
 
     private var repeatTimer: Timer?
     private var pendingBeepWorkItems: [DispatchWorkItem] = []
 
-    /// HIGH-only haptic (lookingAway / caution / noFace never vibrate).
+    /// HIGH + lane-departure haptic (lookingAway / caution / noFace never vibrate).
     private let notificationHaptic = UINotificationFeedbackGenerator()
     private let heavyImpact = UIImpactFeedbackGenerator(style: .heavy)
+    private let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
 
     private var isRunning = false
     /// True only after the persistent AVAudioEngine is prepared and running.
@@ -75,8 +79,10 @@ final class ADASAlertManager: ObservableObject {
         audioReady = false
         notificationHaptic.prepare()
         heavyImpact.prepare()
+        mediumImpact.prepare()
         previousDriver = nil
         previousRoad = nil
+        previousLane = nil
         activeKind = .none
         toneEngine.start { [weak self] in
             Task { @MainActor in
@@ -92,15 +98,21 @@ final class ADASAlertManager: ObservableObject {
         toneEngine.stop()
         previousDriver = nil
         previousRoad = nil
+        previousLane = nil
     }
 
-    /// Call when driver attention or road-risk state may have changed.
-    func update(driverAttention: DriverAttentionState, roadRisk: RoadRiskState) {
+    /// Call when driver attention, road-risk, or lane-assist state may have changed.
+    func update(
+        driverAttention: DriverAttentionState,
+        roadRisk: RoadRiskState,
+        laneAssist: LaneAssistState
+    ) {
         guard isRunning else { return }
 
-        let next = resolveActiveKind(driver: driverAttention, road: roadRisk)
+        let next = resolveActiveKind(driver: driverAttention, road: roadRisk, lane: laneAssist)
         previousDriver = driverAttention
         previousRoad = roadRisk
+        previousLane = laneAssist
 
         // Before the engine is ready: accept state, keep only the current
         // highest-priority resolved alert — never play or queue history.
@@ -118,27 +130,33 @@ final class ADASAlertManager: ObservableObject {
         guard isRunning, !audioReady else { return }
         audioReady = true
 
-        // Reevaluate CURRENT driver + road only — discard any stale interim kinds
-        // by resolving fresh from the latest stored states.
-        guard let driver = previousDriver, let road = previousRoad else {
+        guard let driver = previousDriver,
+              let road = previousRoad,
+              let lane = previousLane else {
             activeKind = .none
             return
         }
-        let next = resolveActiveKind(driver: driver, road: road)
+        let next = resolveActiveKind(driver: driver, road: road, lane: lane)
         if next == .none {
             activeKind = .none
             return
         }
-        // Force play even if activeKind was set during the pre-ready window.
         transition(to: next)
     }
 
     // MARK: - Resolution
-    // Priority: HIGH > lookingAway > caution > noFace > none
+    // Priority: HIGH > lane departure > lookingAway > caution > noFace > none
 
-    private func resolveActiveKind(driver: DriverAttentionState, road: RoadRiskState) -> ActiveKind {
+    private func resolveActiveKind(
+        driver: DriverAttentionState,
+        road: RoadRiskState,
+        lane: LaneAssistState
+    ) -> ActiveKind {
         if road == .high {
             return .roadHigh
+        }
+        if lane == .driftingLeft || lane == .driftingRight {
+            return .laneDeparture
         }
         if driver == .lookingAway {
             return .driverLookingAway
@@ -180,6 +198,12 @@ final class ADASAlertManager: ObservableObject {
             #endif
             playLookingAwayBurst()
             startRepeatTimer(interval: Self.lookingAwayRepeatInterval)
+        case .laneDeparture:
+            #if DEBUG
+            print("[ADASAudio] play laneDeparture")
+            #endif
+            playLaneDepartureBurst()
+            startRepeatTimer(interval: Self.laneDepartureRepeatInterval)
         case .roadHigh:
             #if DEBUG
             print("[ADASAudio] play high")
@@ -215,6 +239,11 @@ final class ADASAlertManager: ObservableObject {
             print("[ADASAudio] play lookingAway")
             #endif
             playLookingAwayBurst()
+        case .laneDeparture:
+            #if DEBUG
+            print("[ADASAudio] play laneDeparture")
+            #endif
+            playLaneDepartureBurst()
         case .roadHigh:
             #if DEBUG
             print("[ADASAudio] play high")
@@ -249,6 +278,14 @@ final class ADASAlertManager: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + gap, execute: item)
         }
         pendingBeepWorkItems = items
+    }
+
+    /// Lane departure: short urgent beep-beep + medium haptic.
+    private func playLaneDepartureBurst() {
+        cancelPendingBeeps()
+        mediumImpact.impactOccurred(intensity: 0.85)
+        mediumImpact.prepare()
+        playBeepBeep(kind: .urgent, gap: 0.11)
     }
 
     /// HIGH: aggressive triple urgent beep + strong haptic.
