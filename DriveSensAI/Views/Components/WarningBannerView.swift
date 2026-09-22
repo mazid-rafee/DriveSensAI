@@ -71,6 +71,7 @@ struct WarningBannerView: View {
     VStack(spacing: 12) {
         WarningBannerView(title: "WATCH THE ROAD", style: .urgent)
         WarningBannerView(title: "VEHICLE CLOSING", style: .critical)
+        WarningBannerView(title: "Wake up", style: .caution)
         WarningBannerView(title: "Driver not detected", style: .caution)
     }
     .padding()

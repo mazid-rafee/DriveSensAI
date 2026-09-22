@@ -359,12 +359,13 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 7HZBY2NLD7;
+				DEVELOPMENT_TEAM = TA74DA3FW3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
 				INFOPLIST_FILE = InfoPlistAdditions.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DriveSensAI uses the front camera to monitor driver attention while you drive.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "DriveSensAI connects to the CrimePredictor model running on your Mac during development.";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "DriveSensAI uses your location for turn-by-turn navigation guidance while you drive.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "DriveSensAI uses your location to show your position on the navigation map while you drive.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "DriveSensAI uses motion data to improve navigation accuracy while you drive.";
@@ -379,7 +380,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mazidrafee.drivesensai;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zaimazarnaz.drivesensai;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -399,12 +400,13 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 7HZBY2NLD7;
+				DEVELOPMENT_TEAM = TA74DA3FW3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
 				INFOPLIST_FILE = InfoPlistAdditions.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DriveSensAI uses the front camera to monitor driver attention while you drive.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "DriveSensAI connects to the CrimePredictor model running on your Mac during development.";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "DriveSensAI uses your location for turn-by-turn navigation guidance while you drive.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "DriveSensAI uses your location to show your position on the navigation map while you drive.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "DriveSensAI uses motion data to improve navigation accuracy while you drive.";
@@ -419,7 +421,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mazidrafee.drivesensai;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zaimazarnaz.drivesensai;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;

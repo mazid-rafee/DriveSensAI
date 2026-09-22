@@ -42,6 +42,7 @@ final class ADASAlertManager: ObservableObject {
     private enum ActiveKind: Equatable {
         case none
         case driverNoFace
+        case driverWakeUp
         case roadCaution
         case driverLookingAway
         case laneDeparture
@@ -57,6 +58,7 @@ final class ADASAlertManager: ObservableObject {
     private var previousDriver: DriverAttentionState?
     private var previousRoad: RoadRiskState?
     private var previousLane: LaneAssistState?
+    private var previousWakeUp = false
 
     private var repeatTimer: Timer?
     private var pendingBeepWorkItems: [DispatchWorkItem] = []
@@ -83,6 +85,7 @@ final class ADASAlertManager: ObservableObject {
         previousDriver = nil
         previousRoad = nil
         previousLane = nil
+        previousWakeUp = false
         activeKind = .none
         toneEngine.start { [weak self] in
             Task { @MainActor in
@@ -99,20 +102,28 @@ final class ADASAlertManager: ObservableObject {
         previousDriver = nil
         previousRoad = nil
         previousLane = nil
+        previousWakeUp = false
     }
 
-    /// Call when driver attention, road-risk, or lane-assist state may have changed.
+    /// Call when driver attention, road-risk, lane-assist, or wake-up state may have changed.
     func update(
         driverAttention: DriverAttentionState,
         roadRisk: RoadRiskState,
-        laneAssist: LaneAssistState
+        laneAssist: LaneAssistState,
+        wakeUpAlert: Bool = false
     ) {
         guard isRunning else { return }
 
-        let next = resolveActiveKind(driver: driverAttention, road: roadRisk, lane: laneAssist)
+        let next = resolveActiveKind(
+            driver: driverAttention,
+            road: roadRisk,
+            lane: laneAssist,
+            wakeUp: wakeUpAlert
+        )
         previousDriver = driverAttention
         previousRoad = roadRisk
         previousLane = laneAssist
+        previousWakeUp = wakeUpAlert
 
         // Before the engine is ready: accept state, keep only the current
         // highest-priority resolved alert — never play or queue history.
@@ -136,7 +147,12 @@ final class ADASAlertManager: ObservableObject {
             activeKind = .none
             return
         }
-        let next = resolveActiveKind(driver: driver, road: road, lane: lane)
+        let next = resolveActiveKind(
+            driver: driver,
+            road: road,
+            lane: lane,
+            wakeUp: previousWakeUp
+        )
         if next == .none {
             activeKind = .none
             return
@@ -145,12 +161,13 @@ final class ADASAlertManager: ObservableObject {
     }
 
     // MARK: - Resolution
-    // Priority: HIGH > lane departure > lookingAway > caution > noFace > none
+    // Priority: HIGH > lane departure > lookingAway > caution > wakeUp / noFace > none
 
     private func resolveActiveKind(
         driver: DriverAttentionState,
         road: RoadRiskState,
-        lane: LaneAssistState
+        lane: LaneAssistState,
+        wakeUp: Bool
     ) -> ActiveKind {
         if road == .high {
             return .roadHigh
@@ -163,6 +180,10 @@ final class ADASAlertManager: ObservableObject {
         }
         if road == .caution {
             return .roadCaution
+        }
+        // Same priority slot as noFace — wake-up replaces that alert when active.
+        if wakeUp {
+            return .driverWakeUp
         }
         if driver == .noFace {
             return .driverNoFace
@@ -183,6 +204,12 @@ final class ADASAlertManager: ObservableObject {
         case .driverNoFace:
             #if DEBUG
             print("[ADASAudio] play noFace")
+            #endif
+            playBeepBeep(kind: .soft, gap: 0.14)
+            startRepeatTimer(interval: Self.noFaceRepeatInterval)
+        case .driverWakeUp:
+            #if DEBUG
+            print("[ADASAudio] play wakeUp")
             #endif
             playBeepBeep(kind: .soft, gap: 0.14)
             startRepeatTimer(interval: Self.noFaceRepeatInterval)
@@ -227,6 +254,11 @@ final class ADASAlertManager: ObservableObject {
         case .driverNoFace:
             #if DEBUG
             print("[ADASAudio] play noFace")
+            #endif
+            playBeepBeep(kind: .soft, gap: 0.14)
+        case .driverWakeUp:
+            #if DEBUG
+            print("[ADASAudio] play wakeUp")
             #endif
             playBeepBeep(kind: .soft, gap: 0.14)
         case .roadCaution:

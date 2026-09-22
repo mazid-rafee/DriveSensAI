@@ -8,11 +8,15 @@ import Foundation
 import Vision
 
 /// Processes front-camera frames and publishes driver attention state.
+/// Also extracts drowsiness model features (Vision landmarks + hand pose) for remote inference.
 @MainActor
 final class DriverMonitor: ObservableObject {
     @Published private(set) var attentionState: DriverAttentionState = .noFace
     @Published private(set) var cameraError: CameraError?
     @Published private(set) var isRunning = false
+
+    /// Optional remote drowsiness capture path (logging only; does not drive UI).
+    weak var drowsinessCoordinator: DrowsinessInferenceCoordinator?
 
     private let cameraManager = CameraManager()
 
@@ -107,7 +111,11 @@ final class DriverMonitor: ObservableObject {
             processingLock.unlock()
         }
 
-        let request = VNDetectFaceRectanglesRequest()
+        // Landmarks request also yields face bounds + pose (yaw/pitch/roll).
+        let faceRequest = VNDetectFaceLandmarksRequest()
+        let handRequest = VNDetectHumanHandPoseRequest()
+        handRequest.maximumHandCount = 2
+
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
             orientation: .leftMirrored,
@@ -115,21 +123,37 @@ final class DriverMonitor: ObservableObject {
         )
 
         do {
-            try handler.perform([request])
-            let observations = request.results ?? []
+            try handler.perform([faceRequest, handRequest])
+            let faces = faceRequest.results ?? []
+            let hands = handRequest.results ?? []
+
             let instant = Self.classifyInstantState(
-                observations: observations,
+                observations: faces,
                 yawThreshold: yawThreshold
+            )
+
+            let sample = DrowsinessFeatureExtractor.makeSample(
+                faces: faces,
+                hands: hands,
+                timestamp: Date()
             )
 
             Task { @MainActor in
                 self.applyTemporalLogic(instantState: instant)
+                self.drowsinessCoordinator?.ingest(sample)
             }
         } catch {
+            // Still emit a masked all-zero sample so the temporal stream stays aligned.
+            let sample = DrowsinessFeatureExtractor.makeSample(
+                faces: [],
+                hands: [],
+                timestamp: Date()
+            )
             Task { @MainActor in
                 guard self.isRunning else { return }
                 self.lookingAwayStartedAt = nil
                 self.attentionState = .noFace
+                self.drowsinessCoordinator?.ingest(sample)
             }
         }
     }

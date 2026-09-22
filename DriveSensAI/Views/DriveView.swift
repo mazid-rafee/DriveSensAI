@@ -13,6 +13,7 @@ struct DriveView: View {
     @StateObject private var speedMonitor = SpeedMonitor()
     @StateObject private var laneDetector = LaneDetectionService()
     @StateObject private var alertManager = ADASAlertManager()
+    @StateObject private var drowsinessRemote = DrowsinessInferenceCoordinator()
 
     /// Stable owner for the non-Observable MultiCamManager + published UI status.
     @StateObject private var multiCamOwner = MultiCamSessionOwner()
@@ -57,15 +58,18 @@ struct DriveView: View {
         .animation(.easeInOut(duration: 0.2), value: percentageAboveLimit)
         .animation(.easeInOut(duration: 0.2), value: speedMonitor.speedMPH)
         .animation(.easeInOut(duration: 0.2), value: warningBanner?.title)
+        .animation(.easeInOut(duration: 0.2), value: drowsinessRemote.isWakeUpAlertActive)
         .onAppear {
             startMultiCamIfNeeded()
             speedMonitor.start()
             alertManager.start()
+            drowsinessRemote.start()
             syncLaneSpeedGate()
             syncADASAlerts()
         }
         .onDisappear {
             alertManager.stop()
+            drowsinessRemote.stop()
             stopMultiCam()
             speedMonitor.stop()
         }
@@ -91,6 +95,9 @@ struct DriveView: View {
         .onChange(of: laneDetector.result.state) { _, _ in
             syncADASAlerts()
         }
+        .onChange(of: drowsinessRemote.isWakeUpAlertActive) { _, _ in
+            syncADASAlerts()
+        }
         .onChange(of: speedMonitor.speedMPH) { _, _ in
             syncLaneSpeedGate()
             logOverLimitIfNeeded()
@@ -108,7 +115,8 @@ struct DriveView: View {
         alertManager.update(
             driverAttention: driverMonitor.attentionState,
             roadRisk: roadRiskAnalyzer.state,
-            laneAssist: laneDetector.result.state
+            laneAssist: laneDetector.result.state,
+            wakeUpAlert: drowsinessRemote.isWakeUpAlertActive
         )
     }
 
@@ -412,7 +420,7 @@ struct DriveView: View {
         }
     }
 
-    /// Priority: HIGH road risk > lane drift (speed-gated) > looking away > major speeding > no face.
+    /// Priority: HIGH road risk > lane drift > looking away > major speeding > wake up / no face.
     private var warningBanner: (title: String, style: WarningBannerView.Style)? {
         if roadDetector.isModelReady,
            roadRiskAnalyzer.state == .high {
@@ -436,6 +444,11 @@ struct DriveView: View {
             return ("SLOW DOWN", .urgent)
         }
 
+        // Same banner slot as Driver not detected; wake-up replaces it when active.
+        if drowsinessRemote.isWakeUpAlertActive {
+            return ("Wake up", .caution)
+        }
+
         if driverMonitor.attentionState == .noFace {
             return ("Driver not detected", .caution)
         }
@@ -451,6 +464,7 @@ struct DriveView: View {
         multiCamOwner.errorMessage = nil
 
         // External processing only — do NOT call legacy CameraManager start APIs.
+        driverMonitor.drowsinessCoordinator = drowsinessRemote
         driverMonitor.beginExternalFrameProcessing()
         roadDetector.beginExternalFrameProcessing()
         laneDetector.beginExternalFrameProcessing()

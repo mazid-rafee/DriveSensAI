@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Run DMD drowsiness TCN inference on CUDA (default ``cuda:1``)."""
+"""DMD drowsiness TCN inference helpers (importable) and optional CLI.
+
+Importable API surface used by ``api.inference_service``:
+
+* ``load_checkpoint`` — construct ``GazeZoneTCN``, load weights strictly
+* ``predict_logits`` / ``predict_proba`` — run a ``[batch, T, F]`` tensor
+
+The CLI entrypoint (``python inference.py``) only runs under ``__main__``.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +15,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 from torch.utils.data import DataLoader
@@ -31,43 +39,92 @@ from device import (  # noqa: E402
     resolve_device,
     to_device,
 )
-from model.model import build_model  # noqa: E402
+from model.model import GazeZoneTCN, build_model  # noqa: E402
+
+DEFAULT_CHECKPOINT = _SRC_DIR / "saved_weights" / "best_loss.pt"
 
 
 def load_checkpoint(
     checkpoint_path: Path,
     device: torch.device,
-):
+) -> Tuple[GazeZoneTCN, Dict[str, Any], int]:
+    """Load ``best_loss``-style checkpoint and return ``(model, ckpt, window)``.
+
+    Uses ``load_state_dict(..., strict=True)``. Model is moved to ``device`` and
+    set to ``eval()``.
+    """
+    checkpoint_path = Path(checkpoint_path)
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
+
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    class_to_idx: Dict[str, int] = checkpoint["class_to_idx"]
-    feature_names = checkpoint.get("feature_names", DROWSINESS_FEATURE_NAMES)
-    input_dim = len(feature_names)
+    if "model_state_dict" not in checkpoint:
+        raise KeyError("checkpoint missing required key 'model_state_dict'")
+    if "class_to_idx" not in checkpoint:
+        raise KeyError("checkpoint missing required key 'class_to_idx'")
+
+    class_to_idx: Dict[str, int] = dict(checkpoint["class_to_idx"])
+    feature_names: List[str] = list(
+        checkpoint.get("feature_names") or DROWSINESS_FEATURE_NAMES
+    )
+    if not feature_names:
+        raise ValueError("checkpoint feature_names is empty")
+    if len(class_to_idx) < 2:
+        raise ValueError(
+            f"class_to_idx must contain at least 2 classes, got {class_to_idx}"
+        )
+
     args = checkpoint.get("args") or {}
     window_size = int(
         checkpoint.get("window_size")
         or args.get("window_size")
         or DEFAULT_WINDOW_SIZE
     )
+    if window_size < 1:
+        raise ValueError(f"invalid window_size={window_size}")
 
     model = build_model(
         num_classes=len(class_to_idx),
-        input_dim=input_dim,
+        input_dim=len(feature_names),
     )
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(checkpoint["model_state_dict"], strict=True)
     model.to(device)
     model.eval()
     return model, checkpoint, window_size
 
 
-@torch.no_grad()
+@torch.inference_mode()
+def predict_logits(
+    model: torch.nn.Module,
+    features: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    """Return raw logits for ``features`` shaped ``[batch, T, F]``."""
+    features = to_device(features, device, dtype=torch.float32)
+    return model(features)
+
+
+@torch.inference_mode()
+def predict_proba(
+    model: torch.nn.Module,
+    features: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    """Return softmax class probabilities for ``features`` ``[batch, T, F]``."""
+    logits = predict_logits(model, features, device)
+    return torch.softmax(logits, dim=-1)
+
+
+@torch.inference_mode()
 def run_inference(
     model: torch.nn.Module,
     loader: DataLoader,
     device: torch.device,
 ) -> Dict[str, torch.Tensor]:
-    all_preds = []
-    all_labels = []
-    all_probs = []
+    """Score a DataLoader of ``(features, labels)`` batches (CLI / eval)."""
+    all_preds: List[torch.Tensor] = []
+    all_labels: List[torch.Tensor] = []
+    all_probs: List[torch.Tensor] = []
     for features, labels in tqdm(loader, desc="infer", leave=False):
         features = to_device(features, device, dtype=torch.float32)
         labels = to_device(labels, device, dtype=torch.long)
@@ -84,14 +141,12 @@ def run_inference(
     }
 
 
-def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=Path(__file__).resolve().parent.parent
-        / "saved_weight"
-        / "best_accuracy.pt",
+        default=DEFAULT_CHECKPOINT,
     )
     parser.add_argument("--anns-dir", type=Path, default=ANNS_DIR)
     parser.add_argument("--landmarks-dir", type=Path, default=LANDMARKS_DIR)
@@ -116,7 +171,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     device = resolve_device(args.gpu, require_cuda=not args.allow_cpu)
     configure_cuda(device)
