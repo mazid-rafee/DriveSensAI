@@ -59,7 +59,7 @@ final class RoadDetectionService: ObservableObject {
 
     /// CameraManager already rotates video output by 90° for portrait, and the rear
     /// camera is not mirrored. The delivered CVPixelBuffer is therefore upright → `.up`.
-    /// (DriverMonitor still uses `.leftMirrored` for the front path — do not change that here.
+    /// (DriverMonitor uses `.upMirrored` for the front path — do not change that here.
     /// MultiCam later may centralize/revisit orientation handling.)
     private nonisolated static let visionOrientation: CGImagePropertyOrientation = .up
 

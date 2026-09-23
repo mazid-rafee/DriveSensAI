@@ -32,3 +32,9 @@ AIPackages/CrimePredictor/src/outputs/
 AIPackages/CrimePredictor/.venv/
 AIPackages/CrimePredictor/**/__pycache__/
 AIPackages/CrimePredictor/**/*.py[cod]
+
+AIPackages/DrowsinessDetection/saved_weights/
+AIPackages/DrowsinessDetection/.venv/
+AIPackages/DrowsinessDetection/**/__pycache__/
+AIPackages/DrowsinessDetection/**/*.py[cod]
+

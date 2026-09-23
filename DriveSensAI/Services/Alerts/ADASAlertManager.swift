@@ -42,6 +42,7 @@ final class ADASAlertManager: ObservableObject {
     private enum ActiveKind: Equatable {
         case none
         case driverNoFace
+        case driverWakeUp
         case roadCaution
         case driverLookingAway
         case laneDeparture
@@ -60,6 +61,7 @@ final class ADASAlertManager: ObservableObject {
     private var previousRoad: RoadRiskState?
     private var previousPedestrian: PedestrianRiskState?
     private var previousLane: LaneAssistState?
+    private var previousWakeUp = false
 
     private var repeatTimer: Timer?
     private var pendingBeepWorkItems: [DispatchWorkItem] = []
@@ -72,6 +74,8 @@ final class ADASAlertManager: ObservableObject {
     private var isRunning = false
     /// True only after the persistent AVAudioEngine is prepared and running.
     private var audioReady = false
+    /// One-shot wake beep requested before the engine finished starting.
+    private var pendingWakeUpBeep = false
 
     /// Persistent AVFoundation playback (session + engine); not MainActor-bound.
     private let toneEngine = ADASToneEngine()
@@ -80,6 +84,7 @@ final class ADASAlertManager: ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         audioReady = false
+        pendingWakeUpBeep = false
         notificationHaptic.prepare()
         heavyImpact.prepare()
         mediumImpact.prepare()
@@ -87,6 +92,7 @@ final class ADASAlertManager: ObservableObject {
         previousRoad = nil
         previousPedestrian = nil
         previousLane = nil
+        previousWakeUp = false
         activeKind = .none
         toneEngine.start { [weak self] in
             Task { @MainActor in
@@ -98,20 +104,37 @@ final class ADASAlertManager: ObservableObject {
     func stop() {
         isRunning = false
         audioReady = false
+        pendingWakeUpBeep = false
         clearActiveAlert()
         toneEngine.stop()
         previousDriver = nil
         previousRoad = nil
         previousPedestrian = nil
         previousLane = nil
+        previousWakeUp = false
     }
 
-    /// Call when driver / vehicle / pedestrian / lane ADAS state may have changed.
+    /// Play a one-shot soft beep-beep (e.g. wake-up banner rising edge).
+    /// Does not change the active repeating alert kind.
+    func playWakeUpBeep() {
+        guard isRunning else { return }
+        #if DEBUG
+        print("[ADASAudio] play wakeUp (one-shot)")
+        #endif
+        if audioReady {
+            playBeepBeep(kind: .soft, gap: 0.14)
+        } else {
+            pendingWakeUpBeep = true
+        }
+    }
+
+    /// Call when driver / vehicle / pedestrian / lane / wake-up ADAS state may have changed.
     func update(
         driverAttention: DriverAttentionState,
         roadRisk: RoadRiskState,
         pedestrianRisk: PedestrianRiskState = .clear,
-        laneAssist: LaneAssistState
+        laneAssist: LaneAssistState,
+        wakeUpAlert: Bool = false
     ) {
         guard isRunning else { return }
 
@@ -119,12 +142,14 @@ final class ADASAlertManager: ObservableObject {
             driver: driverAttention,
             road: roadRisk,
             pedestrian: pedestrianRisk,
-            lane: laneAssist
+            lane: laneAssist,
+            wakeUp: wakeUpAlert
         )
         previousDriver = driverAttention
         previousRoad = roadRisk
         previousPedestrian = pedestrianRisk
         previousLane = laneAssist
+        previousWakeUp = wakeUpAlert
 
         // Before the engine is ready: accept state, keep only the current
         // highest-priority resolved alert — never play or queue history.
@@ -142,6 +167,11 @@ final class ADASAlertManager: ObservableObject {
         guard isRunning, !audioReady else { return }
         audioReady = true
 
+        if pendingWakeUpBeep {
+            pendingWakeUpBeep = false
+            playBeepBeep(kind: .soft, gap: 0.14)
+        }
+
         guard let driver = previousDriver,
               let road = previousRoad,
               let pedestrian = previousPedestrian,
@@ -153,7 +183,8 @@ final class ADASAlertManager: ObservableObject {
             driver: driver,
             road: road,
             pedestrian: pedestrian,
-            lane: lane
+            lane: lane,
+            wakeUp: previousWakeUp
         )
         if next == .none {
             activeKind = .none
@@ -163,13 +194,14 @@ final class ADASAlertManager: ObservableObject {
     }
 
     // MARK: - Resolution
-    // Priority: pedestrianClose > road HIGH > lane departure > lookingAway > caution > noFace > none
+    // Priority: pedestrianClose > road HIGH > lane departure > lookingAway > caution > wakeUp / noFace > none
 
     private func resolveActiveKind(
         driver: DriverAttentionState,
         road: RoadRiskState,
         pedestrian: PedestrianRiskState,
-        lane: LaneAssistState
+        lane: LaneAssistState,
+        wakeUp: Bool
     ) -> ActiveKind {
         if pedestrian == .close {
             return .pedestrianClose
@@ -185,6 +217,10 @@ final class ADASAlertManager: ObservableObject {
         }
         if road == .caution {
             return .roadCaution
+        }
+        // Same priority slot as noFace — wake-up replaces that alert when active.
+        if wakeUp {
+            return .driverWakeUp
         }
         if driver == .noFace {
             return .driverNoFace
@@ -208,6 +244,13 @@ final class ADASAlertManager: ObservableObject {
             #endif
             playBeepBeep(kind: .soft, gap: 0.14)
             startRepeatTimer(interval: Self.noFaceRepeatInterval)
+        case .driverWakeUp:
+            #if DEBUG
+            print("[ADASAudio] wakeUp active (one-shot beep owned by DriveView)")
+            #endif
+            // Rising-edge beep is played by DriveView via playWakeUpBeep().
+            // No repeating cadence — the UI holds the banner for a fixed duration.
+            break
         case .roadCaution:
             #if DEBUG
             print("[ADASAudio] play caution")
@@ -255,6 +298,11 @@ final class ADASAlertManager: ObservableObject {
         case .driverNoFace:
             #if DEBUG
             print("[ADASAudio] play noFace")
+            #endif
+            playBeepBeep(kind: .soft, gap: 0.14)
+        case .driverWakeUp:
+            #if DEBUG
+            print("[ADASAudio] play wakeUp")
             #endif
             playBeepBeep(kind: .soft, gap: 0.14)
         case .roadCaution:

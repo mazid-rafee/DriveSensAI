@@ -14,6 +14,7 @@ struct DriveView: View {
     @StateObject private var speedMonitor = SpeedMonitor()
     @StateObject private var laneDetector = LaneDetectionService()
     @StateObject private var alertManager = ADASAlertManager()
+    @StateObject private var drowsinessRemote = DrowsinessInferenceCoordinator()
 
     /// Stable owner for the non-Observable MultiCamManager + published UI status.
     @StateObject private var multiCamOwner = MultiCamSessionOwner()
@@ -30,7 +31,7 @@ struct DriveView: View {
     #endif
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 8) {
@@ -49,6 +50,14 @@ struct DriveView: View {
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 8)
+
+            // TEMP: pin wake banner above the map when closed is detected (5s hold).
+            if drowsinessRemote.isWakeUpAlertActive {
+                wakeUpDebugBanner
+                    .padding(.horizontal, 16)
+                    .padding(.top, 44)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -59,15 +68,20 @@ struct DriveView: View {
         .animation(.easeInOut(duration: 0.2), value: percentageAboveLimit)
         .animation(.easeInOut(duration: 0.2), value: speedMonitor.speedMPH)
         .animation(.easeInOut(duration: 0.2), value: warningBanner?.title)
+        .animation(.easeInOut(duration: 0.2), value: drowsinessRemote.isWakeUpAlertActive)
+        .animation(.easeInOut(duration: 0.2), value: drowsinessRemote.latestPrediction?.label)
+        .animation(.easeInOut(duration: 0.2), value: wakeUpDebugBannerTitle)
         .onAppear {
             startMultiCamIfNeeded()
             speedMonitor.start()
             alertManager.start()
+            drowsinessRemote.start()
             syncLaneSpeedGate()
             syncADASAlerts()
         }
         .onDisappear {
             alertManager.stop()
+            drowsinessRemote.stop()
             stopMultiCam()
             speedMonitor.stop()
         }
@@ -99,6 +113,13 @@ struct DriveView: View {
         .onChange(of: laneDetector.result.state) { _, _ in
             syncADASAlerts()
         }
+        .onChange(of: drowsinessRemote.isWakeUpAlertActive) { wasActive, isActive in
+            syncADASAlerts()
+            // Beep only when the banner becomes visible (rising edge).
+            if isActive, !wasActive {
+                alertManager.playWakeUpBeep()
+            }
+        }
         .onChange(of: speedMonitor.speedMPH) { _, _ in
             syncLaneSpeedGate()
             logOverLimitIfNeeded()
@@ -117,7 +138,8 @@ struct DriveView: View {
             driverAttention: driverMonitor.attentionState,
             roadRisk: roadRiskAnalyzer.state,
             pedestrianRisk: pedestrianRiskAnalyzer.state,
-            laneAssist: laneDetector.result.state
+            laneAssist: laneDetector.result.state,
+            wakeUpAlert: drowsinessRemote.isWakeUpAlertActive
         )
     }
 
@@ -142,6 +164,20 @@ struct DriveView: View {
 
             onDeviceFooter
         }
+    }
+
+    /// Wake banner when closed eyes are detected (held 5s by the coordinator).
+    private var wakeUpDebugBanner: some View {
+        WarningBannerView(title: wakeUpDebugBannerTitle, style: .urgent)
+            .accessibilityLabel(wakeUpDebugBannerTitle)
+    }
+
+    private var wakeUpDebugBannerTitle: String {
+        if let prediction = drowsinessRemote.latestPrediction {
+            let confidence = String(format: "%.0f%%", prediction.confidence * 100.0)
+            return "Wake up · \(prediction.label) (\(confidence))"
+        }
+        return "Wake up · closed"
     }
 
     // MARK: - Top bar
@@ -416,8 +452,8 @@ struct DriveView: View {
         }
     }
 
-    /// Priority: Pedestrian Close! > Rapid closing > lane drift > looking away > major speeding > no face.
-    /// Closing vehicle has no dedicated banner (existing behavior preserved).
+    /// Priority: Pedestrian Close! > Rapid closing > lane drift > looking away >
+    /// major speeding > wake up / no face. Closing vehicle has no dedicated banner.
     private var warningBanner: (title: String, style: WarningBannerView.Style)? {
         if roadDetector.isModelReady {
             if pedestrianRiskAnalyzer.state == .close {
@@ -443,6 +479,10 @@ struct DriveView: View {
 
         if speedingState == .major {
             return ("SLOW DOWN", .urgent)
+        }
+
+        if drowsinessRemote.isWakeUpAlertActive {
+            return (wakeUpDebugBannerTitle, .caution)
         }
 
         if driverMonitor.attentionState == .noFace {
@@ -471,6 +511,7 @@ struct DriveView: View {
         multiCamOwner.errorMessage = nil
 
         // External processing only — do NOT call legacy CameraManager start APIs.
+        driverMonitor.drowsinessCoordinator = drowsinessRemote
         driverMonitor.beginExternalFrameProcessing()
         roadDetector.beginExternalFrameProcessing()
         laneDetector.beginExternalFrameProcessing()

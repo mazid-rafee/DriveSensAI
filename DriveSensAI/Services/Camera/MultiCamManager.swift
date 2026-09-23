@@ -286,7 +286,7 @@ nonisolated final class MultiCamManager: NSObject, AVCaptureVideoDataOutputSampl
     }
 
     /// Preserve Milestone 1/2.1 delivered-buffer semantics:
-    /// 90° rotation for portrait; mirror front only. DriverMonitor still uses `.leftMirrored`;
+    /// 90° rotation for portrait; mirror front only. DriverMonitor uses `.upMirrored`;
     /// RoadDetectionService still uses `.up` for the already-rotated rear buffer.
     private func configureConnection(_ connection: AVCaptureConnection, mirror: Bool) {
         if connection.isVideoRotationAngleSupported(90) {
@@ -441,6 +441,12 @@ nonisolated final class MultiCamManager: NSObject, AVCaptureVideoDataOutputSampl
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         if output === frontVideoOutput {
+            #if DEBUG
+            DrowsinessOrientationDebugProbe.updateConnection(
+                rotationDegrees: connection.videoRotationAngle,
+                mirrored: connection.isVideoMirrored
+            )
+            #endif
             onFrontFrame?(pixelBuffer)
         } else if output === rearVideoOutput {
             onRearFrame?(pixelBuffer)
