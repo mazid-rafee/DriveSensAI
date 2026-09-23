@@ -132,7 +132,7 @@ struct RouteSafetyInformationDetails: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 24) {
                 headerSection
                 tripSection
                 safetySummarySection
@@ -143,7 +143,7 @@ struct RouteSafetyInformationDetails: View {
             }
             .padding(18)
         }
-        .frame(maxWidth: 360, maxHeight: 364)
+        .frame(maxWidth: 440, maxHeight: 364)
         .background {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color(.systemBackground))
@@ -186,7 +186,7 @@ struct RouteSafetyInformationDetails: View {
                 if let score = model.safetyScore {
                     detailRow(
                         label: "Safety score",
-                        value: String(format: "%.6g", score)
+                        value: String(format: "%.2f", score)
                     )
                 }
             }
@@ -194,7 +194,7 @@ struct RouteSafetyInformationDetails: View {
     }
 
     private var categoryRatesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 16) {
             if let bin = model.activeHourBinStart {
                 sectionTitle("Crime rates · \(Self.hourBinLabel(bin))")
             } else {
@@ -205,12 +205,81 @@ struct RouteSafetyInformationDetails: View {
             }
 
             if model.activeHourBinStart != nil {
-                rateRow(label: "Person", value: model.personRate)
-                rateRow(label: "Property", value: model.propertyRate)
-                rateRow(label: "Society", value: model.societyRate)
-                rateRow(label: "Other", value: model.otherRate)
+                VStack(spacing: 8) {
+                    crimeCategoryCard(
+                        title: "Offense against person",
+                        examples: "Assault, homicide, robbery, sex offenses, etc.",
+                        rate: model.personRate
+                    )
+                    crimeCategoryCard(
+                        title: "Offense against property",
+                        examples: "Theft, burglary, vandalism, etc.",
+                        rate: model.propertyRate
+                    )
+                    crimeCategoryCard(
+                        title: "Offense against society",
+                        examples: "Drugs, shootings, etc.",
+                        rate: model.societyRate
+                    )
+                    crimeCategoryCard(
+                        title: "Other",
+                        examples: "",
+                        rate: model.otherRate
+                    )
+                }
             }
         }
+    }
+
+    private func crimeCategoryCard(
+        title: String,
+        examples: String,
+        rate: Double?
+    ) -> some View {
+        Grid(horizontalSpacing: 8, verticalSpacing: 0) {
+            GridRow(alignment: .center) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        
+                    Text(examples)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .gridCellColumns(3)
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(rate.map { String(format: "%.4g", $0) } ?? "—")
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.trailing)
+                    Text("crimes/hr")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .gridCellColumns(2)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(title), \(rate.map { String(format: "%.4g crimes/hr", $0) } ?? "unavailable")"
+        )
     }
 
     private var hourlyChartSection: some View {
@@ -220,13 +289,16 @@ struct RouteSafetyInformationDetails: View {
             Chart(chartRows, id: \.label) { row in
                 BarMark(
                     x: .value("Safety score", row.sum),
-                    y: .value("Time", row.label)
+                    y: .value("Time", row.label),
+                    height: .ratio(0.78)
                 )
                 .foregroundStyle(
                     row.isActive
                         ? goGreen
                         : goGreen.opacity(row.sum > 0 ? 0.45 : 0.15)
                 )
+                // Rounds the bar ends; for horizontal bars this rounds the left (origin) edge.
+                .cornerRadius(8, style: .continuous)
             }
             // First domain value sits at the bottom; reverse so midnight is at the top.
             .chartYScale(domain: Array(timeLabelDomain.reversed()))
@@ -248,7 +320,7 @@ struct RouteSafetyInformationDetails: View {
                     }
                 }
             }
-            .frame(height: 182)
+            .frame(height: 210)
         }
     }
 
@@ -272,13 +344,6 @@ struct RouteSafetyInformationDetails: View {
                 .foregroundStyle(valueColor)
                 .multilineTextAlignment(.trailing)
         }
-    }
-
-    private func rateRow(label: String, value: Double?) -> some View {
-        detailRow(
-            label: label,
-            value: value.map { String(format: "%.6g / hr", $0) } ?? "—"
-        )
     }
 
     static func hourBinLabel(_ binStart: Int) -> String {

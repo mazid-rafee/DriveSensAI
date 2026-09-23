@@ -27,11 +27,11 @@ struct WarningBannerView: View {
                 .minimumScaleFactor(0.85)
         }
         .foregroundStyle(foreground)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
         .padding(.horizontal, 12)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(background)
         )
         .accessibilityAddTraits(.isHeader)
@@ -71,6 +71,7 @@ struct WarningBannerView: View {
     VStack(spacing: 12) {
         WarningBannerView(title: "WATCH THE ROAD", style: .urgent)
         WarningBannerView(title: "VEHICLE CLOSING", style: .critical)
+        WarningBannerView(title: "Wake up", style: .caution)
         WarningBannerView(title: "Driver not detected", style: .caution)
     }
     .padding()

@@ -365,6 +365,7 @@
 				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
 				INFOPLIST_FILE = InfoPlistAdditions.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DriveSensAI uses the front camera to monitor driver attention while you drive.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "DriveSensAI connects to the CrimePredictor model running on your Mac during development.";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "DriveSensAI uses your location for turn-by-turn navigation guidance while you drive.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "DriveSensAI uses your location to show your position on the navigation map while you drive.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "DriveSensAI uses motion data to improve navigation accuracy while you drive.";
@@ -405,6 +406,7 @@
 				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
 				INFOPLIST_FILE = InfoPlistAdditions.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DriveSensAI uses the front camera to monitor driver attention while you drive.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "DriveSensAI connects to the CrimePredictor model running on your Mac during development.";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "DriveSensAI uses your location for turn-by-turn navigation guidance while you drive.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "DriveSensAI uses your location to show your position on the navigation map while you drive.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "DriveSensAI uses motion data to improve navigation accuracy while you drive.";
