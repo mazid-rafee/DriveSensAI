@@ -1,0 +1,48 @@
+{
+  "checkpoint": "/home/z/zaimazarnaz/research1/DriveSensAI/DriveSensAI/AIPackages/DrowsinessDetection/saved_weights/best_accuracy_v2.pt",
+  "best_val_loss": 0.311599378122845,
+  "best_val_accuracy": 0.908067524433136,
+  "best_val_macro_f1": 0.5519393086433411,
+  "class_to_idx": {
+    "closed": 0,
+    "open": 1,
+    "undefined": 2
+  },
+  "confusion_matrix": [
+    [
+      1232,
+      259,
+      0
+    ],
+    [
+      740,
+      8932,
+      22
+    ],
+    [
+      8,
+      0,
+      0
+    ]
+  ],
+  "per_class": {
+    "closed": {
+      "precision": 0.6222222447395325,
+      "recall": 0.8262910842895508,
+      "f1": 0.7098819017410278,
+      "support": 1491
+    },
+    "open": {
+      "precision": 0.9718202352523804,
+      "recall": 0.9213947057723999,
+      "f1": 0.9459359645843506,
+      "support": 9694
+    },
+    "undefined": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 8
+    }
+  }
+}
