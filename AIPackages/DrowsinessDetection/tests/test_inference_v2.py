@@ -27,7 +27,7 @@ from inference import (  # noqa: E402
 )
 from label_contract import CLASS_TO_IDX, NUM_CLASSES  # noqa: E402
 
-CHECKPOINT = PACKAGE_ROOT / "saved_weights" / "best_accuracy_v3.pt"
+CHECKPOINT = PACKAGE_ROOT / "saved_weights" / "best_loss_v3.pt"
 LEGACY_SMOKE = PACKAGE_ROOT / "saved_weights" / "schema_v2_smoke.pt"
 OLD_GAP_V3 = PACKAGE_ROOT / "saved_weights" / "best_accuracy_v3.pt"
 

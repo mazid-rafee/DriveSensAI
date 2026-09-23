@@ -50,7 +50,7 @@ from device import (  # noqa: E402
 )
 from model.model import GazeZoneTCN, build_model  # noqa: E402
 
-DEFAULT_CHECKPOINT = _SRC_DIR / "saved_weights" / "best_accuracy_v3.pt"
+DEFAULT_CHECKPOINT = _SRC_DIR / "saved_weights" / "best_loss_v3.pt"
 
 
 class SchemaContractError(ValueError):
