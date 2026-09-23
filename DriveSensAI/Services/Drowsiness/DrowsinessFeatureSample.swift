@@ -18,11 +18,13 @@ struct DrowsinessFeatureSample: Equatable, Sendable {
     }
 }
 
-/// Exact feature contract from `best_loss.pt` / `DROWSINESS_FEATURE_NAMES`.
+/// Exact feature contract from `feature_contract.py` / `FEATURE_SCHEMA_V2.md`.
 enum DrowsinessFeatureContract {
+    /// Must match Python `FEATURE_SCHEMA_VERSION`.
+    static let schemaVersion: String = "drowsiness_feature_schema_v2"
+
     static let featureNames: [String] = [
         "face_detected",
-        "vision_confidence",
         "yaw",
         "pitch",
         "roll",
@@ -30,19 +32,12 @@ enum DrowsinessFeatureContract {
         "right_eye_valid",
         "left_eye_aspect_ratio",
         "right_eye_aspect_ratio",
-        "left_eyelid_gap",
-        "right_eyelid_gap",
-        "left_pupil_x",
-        "left_pupil_y",
-        "right_pupil_x",
-        "right_pupil_y",
-        "mouth_valid",
-        "mouth_aspect_ratio",
-        "inner_lip_gap",
-        "inner_mouth_area",
-        "hand_detected",
-        "hand_confidence",
-        "hand_near_mouth",
+        "left_eyelid_gap_ratio",
+        "right_eyelid_gap_ratio",
+        "left_pupil_rel_x",
+        "left_pupil_rel_y",
+        "right_pupil_rel_x",
+        "right_pupil_rel_y",
     ]
 
     static var featureCount: Int { featureNames.count }
@@ -50,8 +45,12 @@ enum DrowsinessFeatureContract {
     /// Camera target FPS in `MultiCamManager` (not stored in the checkpoint).
     static let samplingRateHz: Double = 15.0
 
-    /// Temporal window from `checkpoint["window_size"]`.
-    static let windowFrames: Int = 5
+    /// Temporal window from training checkpoint ``window_frames``.
+    static let windowFrames: Int = 20
 
-    static let schemaVersion: Int = 1
+    static let eps: Double = 1e-6
+    static let minEyeLandmarkPoints: Int = 4
+
+    /// Canonical server class names (must match Python ``CLASS_TO_IDX``).
+    static let classNames: [String] = ["closed", "open", "undefined"]
 }

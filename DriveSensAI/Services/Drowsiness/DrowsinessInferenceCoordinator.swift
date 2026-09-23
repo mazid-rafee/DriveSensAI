@@ -6,12 +6,12 @@
 import Combine
 import Foundation
 
-/// Buffers ~15 FPS feature rows and POSTs a T=5 window every 400 ms.
-/// Publishes a wake-up flag after two consecutive `"close"` labels.
+/// Buffers ~15 FPS feature rows and POSTs a T=20 window once per second.
+/// Logs remote predictions; does not drive SwiftUI layout changes here.
 final class DrowsinessInferenceCoordinator: ObservableObject {
-    /// Latest remote prediction (logging + UI).
+    /// Latest remote prediction (logging only until UI is wired).
     @Published private(set) var latestPrediction: DrowsinessPredictResponse?
-    /// True after two consecutive successful replies with `label == "close"`.
+    /// True after consecutive successful replies with `label == "closed"`.
     @Published private(set) var isWakeUpAlertActive = false
 
     private let client = DrowsinessAPIClient()
@@ -28,10 +28,9 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
 
     private let windowFrames = DrowsinessFeatureContract.windowFrames
     private let maxBuffer = DrowsinessFeatureContract.windowFrames * 4
-    private let sendInterval: TimeInterval = 0.4
+    private let sendInterval: TimeInterval = 1.0
     private let wakeUpCloseThreshold = 5
-    private static let closeLabel = "close"
-    private static let undefinedLabel = "undefined"
+    private static let closedLabel = "closed"
 
     func start() {
         lock.lock()
@@ -100,7 +99,7 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
         lock.unlock()
 
         let request = DrowsinessPredictRequest(
-            schemaVersion: DrowsinessFeatureContract.schemaVersion,
+            featureSchemaVersion: DrowsinessFeatureContract.schemaVersion,
             sessionID: session,
             sequenceID: seq,
             sentAtUTC: Date(),
@@ -162,6 +161,7 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
         print(
             "[DrowsinessRemote] session=\(response.sessionID) seq=\(response.sequenceID) "
                 + "label=\(response.label) confidence=\(String(format: "%.4f", response.confidence)) "
+                + "schema=\(response.featureSchemaVersion ?? "nil") "
                 + "model=\(response.modelVersion) server_ms=\(String(format: "%.1f", response.inferenceLatencyMs)) "
                 + "round_trip_ms=\(String(format: "%.1f", roundTripMs))"
         )
@@ -170,7 +170,7 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
     @MainActor
     private func updateWakeUpStreak(label: String) {
         lock.lock()
-        if label == Self.undefinedLabel {
+        if label == Self.closedLabel {
             consecutiveCloseCount += 1
         } else {
             consecutiveCloseCount = 0

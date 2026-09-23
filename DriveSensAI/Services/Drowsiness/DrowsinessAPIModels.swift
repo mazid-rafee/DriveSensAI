@@ -6,7 +6,7 @@
 import Foundation
 
 struct DrowsinessPredictRequest: Codable, Equatable, Sendable {
-    let schemaVersion: Int
+    let featureSchemaVersion: String
     let sessionID: String
     let sequenceID: Int
     let sentAtUTC: Date
@@ -15,7 +15,7 @@ struct DrowsinessPredictRequest: Codable, Equatable, Sendable {
     let samples: [DrowsinessAPISample]
 
     enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version"
+        case featureSchemaVersion = "feature_schema_version"
         case sessionID = "session_id"
         case sequenceID = "sequence_id"
         case sentAtUTC = "sent_at_utc"
@@ -43,6 +43,7 @@ struct DrowsinessPredictResponse: Codable, Equatable, Sendable {
     let confidence: Double
     let probabilities: [String: Double]
     let modelVersion: String
+    let featureSchemaVersion: String?
     let inferenceLatencyMs: Double
 
     enum CodingKeys: String, CodingKey {
@@ -53,6 +54,7 @@ struct DrowsinessPredictResponse: Codable, Equatable, Sendable {
         case confidence
         case probabilities
         case modelVersion = "model_version"
+        case featureSchemaVersion = "feature_schema_version"
         case inferenceLatencyMs = "inference_latency_ms"
     }
 }
