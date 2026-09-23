@@ -22,7 +22,15 @@ from torch.utils.data import DataLoader, Dataset
 PathLike = Union[Path, str]
 
 ANNS_DIR = Path("/data/quantization/zaima/DMD/drowsiness/anns")
-LANDMARKS_DIR = Path("/data/quantization/zaima/DMD/drowsiness/landmarks")
+# Prefer package-local schema-v2 CSVs (legacy Apple Vision dumps use a different suffix).
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_V2_LANDMARKS = _PACKAGE_ROOT / "data" / "landmarks_v2"
+_LEGACY_LANDMARKS = Path("/data/quantization/zaima/DMD/drowsiness/landmarks")
+LANDMARKS_DIR = (
+    _DEFAULT_V2_LANDMARKS
+    if _DEFAULT_V2_LANDMARKS.is_dir()
+    else _LEGACY_LANDMARKS
+)
 
 ANN_SUFFIX = "_rgb_ann_drowsiness.json"
 
@@ -30,7 +38,6 @@ ANN_SUFFIX = "_rgb_ann_drowsiness.json"
 EYES_STATE_PREFIX = "eyes_state/"
 
 # Allow importing when this file is loaded as ``pre_process.dataloader``.
-_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
@@ -382,6 +389,25 @@ class DMDGazeFrameDataset(Dataset):
         matched_keys = sorted(set(anns) & set(csvs))
         ann_only = sorted(set(anns) - set(csvs))
         csv_only = sorted(set(csvs) - set(anns))
+
+        if not matched_keys:
+            legacy_hint = ""
+            legacy_glob = list(self.landmarks_dir.glob("*_rgb_face.apple_drowsiness.csv"))
+            if legacy_glob and not list(self.landmarks_dir.glob(f"*{CSV_SUFFIX}")):
+                legacy_hint = (
+                    f" Found {len(legacy_glob)} legacy "
+                    "'*_rgb_face.apple_drowsiness.csv' files but schema v2 requires "
+                    f"'{CSV_SUFFIX}'. Convert with: "
+                    "python scripts/build_v2_csv_from_legacy.py "
+                    f"--landmarks-dir {self.landmarks_dir} "
+                    "or pass --landmarks-dir data/landmarks_v2"
+                )
+            raise FileNotFoundError(
+                "No matched ann/CSV sessions. "
+                f"anns={len(anns)} csvs={len(csvs)} "
+                f"(looking for landmark suffix {CSV_SUFFIX!r} under "
+                f"{self.landmarks_dir}).{legacy_hint}"
+            )
 
         self.matched_session_keys = matched_keys
         self.ann_only_session_keys = ann_only

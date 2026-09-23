@@ -7,11 +7,11 @@ import Combine
 import Foundation
 
 /// Buffers ~15 FPS feature rows and POSTs a T=20 window once per second.
-/// Logs remote predictions; does not drive SwiftUI layout changes here.
+/// Publishes wake-up when the remote label is ``closed``, holding the banner for 5s.
 final class DrowsinessInferenceCoordinator: ObservableObject {
-    /// Latest remote prediction (logging only until UI is wired).
+    /// Latest remote prediction.
     @Published private(set) var latestPrediction: DrowsinessPredictResponse?
-    /// True after consecutive successful replies with `label == "closed"`.
+    /// True while the wake-up banner should be shown (closed detected, held 5s).
     @Published private(set) var isWakeUpAlertActive = false
 
     private let client = DrowsinessAPIClient()
@@ -23,13 +23,15 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
     private var isRunning = false
     private var requestInFlight = false
     private var sendTimer: Timer?
+    private var wakeHoldTimer: Timer?
     private var activeTask: Task<Void, Never>?
     private var consecutiveCloseCount = 0
 
     private let windowFrames = DrowsinessFeatureContract.windowFrames
     private let maxBuffer = DrowsinessFeatureContract.windowFrames * 4
     private let sendInterval: TimeInterval = 1.0
-    private let wakeUpCloseThreshold = 5
+    private let wakeUpCloseThreshold = 1
+    private let wakeHoldDuration: TimeInterval = 5.0
     private static let closedLabel = "closed"
 
     func start() {
@@ -46,6 +48,8 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
             guard let self else { return }
             self.latestPrediction = nil
             self.isWakeUpAlertActive = false
+            self.wakeHoldTimer?.invalidate()
+            self.wakeHoldTimer = nil
             self.sendTimer?.invalidate()
             let timer = Timer.scheduledTimer(withTimeInterval: self.sendInterval, repeats: true) { [weak self] _ in
                 self?.tickSend()
@@ -68,6 +72,8 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             self?.latestPrediction = nil
             self?.isWakeUpAlertActive = false
+            self?.wakeHoldTimer?.invalidate()
+            self?.wakeHoldTimer = nil
             self?.sendTimer?.invalidate()
             self?.sendTimer = nil
         }
@@ -157,27 +163,48 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
         }
 
         latestPrediction = response
-        updateWakeUpStreak(label: response.label)
+        updateWakeUpFromLabel(response.label)
         print(
             "[DrowsinessRemote] session=\(response.sessionID) seq=\(response.sequenceID) "
                 + "label=\(response.label) confidence=\(String(format: "%.4f", response.confidence)) "
                 + "schema=\(response.featureSchemaVersion ?? "nil") "
                 + "model=\(response.modelVersion) server_ms=\(String(format: "%.1f", response.inferenceLatencyMs)) "
-                + "round_trip_ms=\(String(format: "%.1f", roundTripMs))"
+                + "round_trip_ms=\(String(format: "%.1f", roundTripMs)) "
+                + "wakeUp=\(isWakeUpAlertActive)"
         )
     }
 
     @MainActor
-    private func updateWakeUpStreak(label: String) {
+    private func updateWakeUpFromLabel(_ label: String) {
         lock.lock()
         if label == Self.closedLabel {
             consecutiveCloseCount += 1
         } else {
             consecutiveCloseCount = 0
         }
-        let active = consecutiveCloseCount >= wakeUpCloseThreshold
+        let shouldPresent = consecutiveCloseCount >= wakeUpCloseThreshold
         lock.unlock()
-        isWakeUpAlertActive = active
+
+        if shouldPresent {
+            presentWakeUpAlert(holdDuration: wakeHoldDuration)
+        }
+        // Non-closed labels do not clear an active hold — the timer owns dismissal.
+    }
+
+    /// Show the wake banner and (re)start the 5s hold. Rising edges are observed by DriveView.
+    @MainActor
+    private func presentWakeUpAlert(holdDuration: TimeInterval) {
+        isWakeUpAlertActive = true
+        wakeHoldTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: holdDuration, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isWakeUpAlertActive = false
+                self.wakeHoldTimer = nil
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        wakeHoldTimer = timer
     }
 
     @MainActor
@@ -188,11 +215,10 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
     ) {
         lock.lock()
         requestInFlight = false
-        // Failures are not labeled replies — clear streak so wake-up never trips on errors.
+        // Failures are not labeled replies — clear streak only.
+        // Do not dismiss an active wake hold on network error.
         consecutiveCloseCount = 0
         lock.unlock()
-        isWakeUpAlertActive = false
-        // Network / server failure must never become a drowsiness-positive UI signal.
         print(
             "[DrowsinessRemote][ERROR] session=\(expectedSession) seq=\(expectedSequence) "
                 + "error=\(error.localizedDescription)"

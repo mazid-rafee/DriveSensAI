@@ -71,6 +71,8 @@ final class ADASAlertManager: ObservableObject {
     private var isRunning = false
     /// True only after the persistent AVAudioEngine is prepared and running.
     private var audioReady = false
+    /// One-shot wake beep requested before the engine finished starting.
+    private var pendingWakeUpBeep = false
 
     /// Persistent AVFoundation playback (session + engine); not MainActor-bound.
     private let toneEngine = ADASToneEngine()
@@ -79,6 +81,7 @@ final class ADASAlertManager: ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         audioReady = false
+        pendingWakeUpBeep = false
         notificationHaptic.prepare()
         heavyImpact.prepare()
         mediumImpact.prepare()
@@ -97,12 +100,27 @@ final class ADASAlertManager: ObservableObject {
     func stop() {
         isRunning = false
         audioReady = false
+        pendingWakeUpBeep = false
         clearActiveAlert()
         toneEngine.stop()
         previousDriver = nil
         previousRoad = nil
         previousLane = nil
         previousWakeUp = false
+    }
+
+    /// Play a one-shot soft beep-beep (e.g. wake-up banner rising edge).
+    /// Does not change the active repeating alert kind.
+    func playWakeUpBeep() {
+        guard isRunning else { return }
+        #if DEBUG
+        print("[ADASAudio] play wakeUp (one-shot)")
+        #endif
+        if audioReady {
+            playBeepBeep(kind: .soft, gap: 0.14)
+        } else {
+            pendingWakeUpBeep = true
+        }
     }
 
     /// Call when driver attention, road-risk, lane-assist, or wake-up state may have changed.
@@ -140,6 +158,11 @@ final class ADASAlertManager: ObservableObject {
     private func handleAudioEngineReady() {
         guard isRunning, !audioReady else { return }
         audioReady = true
+
+        if pendingWakeUpBeep {
+            pendingWakeUpBeep = false
+            playBeepBeep(kind: .soft, gap: 0.14)
+        }
 
         guard let driver = previousDriver,
               let road = previousRoad,
@@ -209,10 +232,11 @@ final class ADASAlertManager: ObservableObject {
             startRepeatTimer(interval: Self.noFaceRepeatInterval)
         case .driverWakeUp:
             #if DEBUG
-            print("[ADASAudio] play wakeUp")
+            print("[ADASAudio] wakeUp active (one-shot beep owned by DriveView)")
             #endif
-            playBeepBeep(kind: .soft, gap: 0.14)
-            startRepeatTimer(interval: Self.noFaceRepeatInterval)
+            // Rising-edge beep is played by DriveView via playWakeUpBeep().
+            // No repeating cadence — the UI holds the banner for a fixed duration.
+            break
         case .roadCaution:
             #if DEBUG
             print("[ADASAudio] play caution")

@@ -11,13 +11,13 @@ from __future__ import annotations
 import random
 import sys
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import DataLoader, Dataset, Subset, WeightedRandomSampler
 
 _SRC_DIR = Path(__file__).resolve().parent
 if str(_SRC_DIR) not in sys.path:
@@ -47,12 +47,34 @@ DEFAULT_SAMPLING_RATE_HZ = 15.0
 
 BINARY_FEATURE_NAMES = ("face_detected", "left_eye_valid", "right_eye_valid")
 POSE_FEATURE_NAMES = ("yaw", "pitch", "roll")
+# Candidate morphology names; only those present in the frozen schema are used.
+LEFT_MORPHOLOGY_CANDIDATES = (
+    "left_eye_aspect_ratio",
+    "left_eyelid_gap",
+    "left_eyelid_gap_ratio",
+)
+RIGHT_MORPHOLOGY_CANDIDATES = (
+    "right_eye_aspect_ratio",
+    "right_eyelid_gap",
+    "right_eyelid_gap_ratio",
+)
 LEFT_RATIO_NAMES = ("left_eye_aspect_ratio", "left_eyelid_gap_ratio")
 RIGHT_RATIO_NAMES = ("right_eye_aspect_ratio", "right_eyelid_gap_ratio")
+LEFT_PUPIL_CANDIDATES = ("left_pupil_rel_x", "left_pupil_rel_y", "left_pupil_x", "left_pupil_y")
+RIGHT_PUPIL_CANDIDATES = (
+    "right_pupil_rel_x",
+    "right_pupil_rel_y",
+    "right_pupil_x",
+    "right_pupil_y",
+)
 LEFT_PUPIL_NAMES = ("left_pupil_rel_x", "left_pupil_rel_y")
 RIGHT_PUPIL_NAMES = ("right_pupil_rel_x", "right_pupil_rel_y")
 LEFT_EYE_CONTINUOUS = LEFT_RATIO_NAMES + LEFT_PUPIL_NAMES
 RIGHT_EYE_CONTINUOUS = RIGHT_RATIO_NAMES + RIGHT_PUPIL_NAMES
+NONNEGATIVE_CANDIDATES = LEFT_MORPHOLOGY_CANDIDATES + RIGHT_MORPHOLOGY_CANDIDATES
+PUPIL_UNIT_INTERVAL_CANDIDATES = LEFT_PUPIL_NAMES + RIGHT_PUPIL_NAMES
+
+DEFAULT_CLOSED_SAMPLE_FRACTION = 0.3
 
 
 def feature_index_map(
@@ -61,55 +83,158 @@ def feature_index_map(
     return {name: idx for idx, name in enumerate(feature_names)}
 
 
+def _present(names: Sequence[str], feature_set: set[str]) -> Tuple[str, ...]:
+    return tuple(name for name in names if name in feature_set)
+
+
 @dataclass
-class AugmentationConfig:
-    morphology_p: float = 0.5
-    morphology_base_low: float = 0.85
-    morphology_base_high: float = 1.15
+class ClosedAugmentationConfig:
+    """Train-only closed-window augmentation knobs."""
+
+    morphology_p: float = 0.70
+    morphology_base_low: float = 0.90
+    morphology_base_high: float = 1.10
     morphology_asym_low: float = 0.97
     morphology_asym_high: float = 1.03
 
-    noise_p: float = 0.5
+    noise_p: float = 0.50
     noise_rho: float = 0.85
-    pose_noise_std_radians: float = 0.015
-    pupil_noise_std: float = 0.01
-    ratio_noise_std_fraction: float = 0.02
+    pose_noise_std_fraction: float = 0.02
+    eye_noise_std_fraction: float = 0.015
+    pupil_noise_std_fraction: float = 0.01
 
-    bias_p: float = 0.5
-    yaw_bias_abs: float = 0.03
-    pitch_bias_abs: float = 0.03
-    roll_bias_abs: float = 0.02
-    pupil_bias_abs: float = 0.03
+    bias_p: float = 0.50
+    bias_std_fraction: float = 0.03
+    paired_eye_residual_fraction: float = 0.25  # of main bias std
 
-    dropout_p: float = 0.15
+    pupil_jitter_p: float = 0.30
+    pupil_common_std_fraction: float = 0.015
+    pupil_residual_std_fraction: float = 0.005
+
+    dropout_p: float = 0.03
     dropout_min_frames: int = 1
     dropout_max_frames: int = 3
+
+    percentile_low: float = 0.5
+    percentile_high: float = 99.5
+    percentile_margin: float = 0.05
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
-class DrowsinessFeatureAugmenter:
-    """Train-time augmentations for a raw window shaped ``[T, 14]``."""
+# Backward-compatible alias used by older call sites / tests.
+AugmentationConfig = ClosedAugmentationConfig
+
+
+@dataclass
+class FeatureBounds:
+    """Per-feature robust clamp ranges from unaugmented training data."""
+
+    feature_names: List[str]
+    low: np.ndarray
+    high: np.ndarray
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "feature_names": list(self.feature_names),
+            "low": self.low.astype(np.float32),
+            "high": self.high.astype(np.float32),
+        }
+
+
+def fit_feature_bounds(
+    frames: np.ndarray,
+    feature_names: Sequence[str],
+    *,
+    percentile_low: float = 0.5,
+    percentile_high: float = 99.5,
+    margin: float = 0.05,
+) -> FeatureBounds:
+    """Fit continuous-feature clamp bounds on unaugmented training frames."""
+    if frames.ndim != 2 or frames.shape[1] != len(feature_names):
+        raise ValueError(
+            f"expected frames [N, {len(feature_names)}], got {frames.shape}"
+        )
+    index = feature_index_map(feature_names)
+    binary = set(BINARY_FEATURE_NAMES) & set(feature_names)
+    low = np.full(len(feature_names), -np.inf, dtype=np.float64)
+    high = np.full(len(feature_names), np.inf, dtype=np.float64)
+    for name in feature_names:
+        col = index[name]
+        if name in binary:
+            low[col], high[col] = 0.0, 1.0
+            continue
+        values = frames[:, col]
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            continue
+        lo = float(np.percentile(values, percentile_low))
+        hi = float(np.percentile(values, percentile_high))
+        span = max(hi - lo, 1e-6)
+        pad = margin * span
+        low[col] = lo - pad
+        high[col] = hi + pad
+        if name in NONNEGATIVE_CANDIDATES:
+            low[col] = max(0.0, low[col])
+        if name in PUPIL_UNIT_INTERVAL_CANDIDATES:
+            low[col] = max(0.0, low[col])
+            high[col] = min(1.0, high[col])
+    return FeatureBounds(feature_names=list(feature_names), low=low, high=high)
+
+
+class ClosedWindowAugmenter:
+    """On-the-fly closed-window augmentations; never mutates the cached sample."""
 
     def __init__(
         self,
         *,
         feature_names: Sequence[str] = DROWSINESS_FEATURE_NAMES,
-        config: Optional[AugmentationConfig] = None,
+        config: Optional[ClosedAugmentationConfig] = None,
         train_feature_std: Optional[Mapping[str, float]] = None,
+        feature_bounds: Optional[FeatureBounds] = None,
         seed: Optional[int] = None,
         debug: bool = False,
     ) -> None:
         self.feature_names = list(feature_names)
+        self.feature_set = set(self.feature_names)
         self.index = feature_index_map(self.feature_names)
-        self.config = config or AugmentationConfig()
+        self.config = config or ClosedAugmentationConfig()
         self.train_feature_std = {
             name: float(train_feature_std.get(name, 1.0)) if train_feature_std else 1.0
             for name in self.feature_names
         }
+        self.feature_bounds = feature_bounds
         self.debug = bool(debug)
         self._rng = np.random.default_rng(seed)
+
+        self.left_morphology = _present(LEFT_MORPHOLOGY_CANDIDATES, self.feature_set)
+        self.right_morphology = _present(RIGHT_MORPHOLOGY_CANDIDATES, self.feature_set)
+        self.pose_names = _present(POSE_FEATURE_NAMES, self.feature_set)
+        self.left_pupil = _present(LEFT_PUPIL_CANDIDATES, self.feature_set)
+        self.right_pupil = _present(RIGHT_PUPIL_CANDIDATES, self.feature_set)
+        self.left_eye_continuous = _present(
+            LEFT_MORPHOLOGY_CANDIDATES + LEFT_PUPIL_CANDIDATES, self.feature_set
+        )
+        self.right_eye_continuous = _present(
+            RIGHT_MORPHOLOGY_CANDIDATES + RIGHT_PUPIL_CANDIDATES, self.feature_set
+        )
+        self.has_eye_validity = (
+            "left_eye_valid" in self.feature_set and "right_eye_valid" in self.feature_set
+        )
+        self.has_pupil_coords = bool(self.left_pupil or self.right_pupil)
+        # Pupil x/y pairs for coherent jitter (prefer rel_* names).
+        self._pupil_x_pair = _present(
+            ("left_pupil_rel_x", "right_pupil_rel_x", "left_pupil_x", "right_pupil_x"),
+            self.feature_set,
+        )
+        self._pupil_y_pair = _present(
+            ("left_pupil_rel_y", "right_pupil_rel_y", "left_pupil_y", "right_pupil_y"),
+            self.feature_set,
+        )
+        # Enable dropout only when validity masks exist.
+        self.dropout_enabled = self.has_eye_validity and self.config.dropout_p > 0.0
+        self.pupil_jitter_enabled = self.has_pupil_coords and self.config.pupil_jitter_p > 0.0
 
     def reseed(self, seed: int) -> None:
         self._rng = np.random.default_rng(seed)
@@ -128,13 +253,31 @@ class DrowsinessFeatureAugmenter:
             out = self._measurement_noise(out)
         if self._rng.random() < self.config.bias_p:
             out = self._calibration_bias(out)
-        if self._rng.random() < self.config.dropout_p:
+        if self.pupil_jitter_enabled and self._rng.random() < self.config.pupil_jitter_p:
+            out = self._pupil_jitter(out)
+        if self.dropout_enabled and self._rng.random() < self.config.dropout_p:
             out = self._landmark_dropout(out)
 
-        out = enforce_feature_invariants(out, self.index)
+        out = self._clamp_to_bounds(out)
+        out = enforce_feature_invariants(out, self.index, self.feature_names)
         if self.debug and original is not None:
             self._print_debug(original, out)
         return out.astype(np.float32, copy=False)
+
+    def _std(self, name: str) -> float:
+        return max(float(self.train_feature_std.get(name, 1.0)), 1e-6)
+
+    def _has_face(self, window: np.ndarray) -> np.ndarray:
+        if "face_detected" not in self.index:
+            return np.ones(window.shape[0], dtype=bool)
+        return window[:, self.index["face_detected"]] > 0.5
+
+    def _eye_valid(self, window: np.ndarray, side: str) -> np.ndarray:
+        face = self._has_face(window)
+        key = f"{side}_eye_valid"
+        if key not in self.index:
+            return face
+        return (window[:, self.index[key]] > 0.5) & face
 
     def _morphology_scale(self, window: np.ndarray) -> np.ndarray:
         cfg = self.config
@@ -145,9 +288,9 @@ class DrowsinessFeatureAugmenter:
         right_scale = base * self._rng.uniform(
             cfg.morphology_asym_low, cfg.morphology_asym_high
         )
-        for name in LEFT_RATIO_NAMES:
+        for name in self.left_morphology:
             window[:, self.index[name]] *= left_scale
-        for name in RIGHT_RATIO_NAMES:
+        for name in self.right_morphology:
             window[:, self.index[name]] *= right_scale
         return window
 
@@ -165,58 +308,130 @@ class DrowsinessFeatureAugmenter:
 
     def _measurement_noise(self, window: np.ndarray) -> np.ndarray:
         t_len = window.shape[0]
-        idx = self.index
-        face = window[:, idx["face_detected"]] > 0.5
-        left_valid = (window[:, idx["left_eye_valid"]] > 0.5) & face
-        right_valid = (window[:, idx["right_eye_valid"]] > 0.5) & face
+        face = self._has_face(window)
+        left_valid = self._eye_valid(window, "left")
+        right_valid = self._eye_valid(window, "right")
+        cfg = self.config
 
-        for name in POSE_FEATURE_NAMES:
-            noise = self._ar1_noise(t_len, self.config.pose_noise_std_radians)
-            window[:, idx[name]] += noise * face.astype(np.float64)
-
-        for name in LEFT_PUPIL_NAMES:
-            noise = self._ar1_noise(t_len, self.config.pupil_noise_std)
-            window[:, idx[name]] += noise * left_valid.astype(np.float64)
-        for name in RIGHT_PUPIL_NAMES:
-            noise = self._ar1_noise(t_len, self.config.pupil_noise_std)
-            window[:, idx[name]] += noise * right_valid.astype(np.float64)
-
-        frac = self.config.ratio_noise_std_fraction
-        for name in LEFT_RATIO_NAMES:
-            std = frac * max(self.train_feature_std.get(name, 1.0), 1e-6)
+        for name in self.pose_names:
+            std = cfg.pose_noise_std_fraction * self._std(name)
             noise = self._ar1_noise(t_len, std)
-            window[:, idx[name]] += noise * left_valid.astype(np.float64)
-        for name in RIGHT_RATIO_NAMES:
-            std = frac * max(self.train_feature_std.get(name, 1.0), 1e-6)
+            window[:, self.index[name]] += noise * face.astype(np.float64)
+
+        for name in self.left_morphology:
+            std = cfg.eye_noise_std_fraction * self._std(name)
             noise = self._ar1_noise(t_len, std)
-            window[:, idx[name]] += noise * right_valid.astype(np.float64)
+            window[:, self.index[name]] += noise * left_valid.astype(np.float64)
+        for name in self.right_morphology:
+            std = cfg.eye_noise_std_fraction * self._std(name)
+            noise = self._ar1_noise(t_len, std)
+            window[:, self.index[name]] += noise * right_valid.astype(np.float64)
+
+        for name in self.left_pupil:
+            std = cfg.pupil_noise_std_fraction * self._std(name)
+            noise = self._ar1_noise(t_len, std)
+            window[:, self.index[name]] += noise * left_valid.astype(np.float64)
+        for name in self.right_pupil:
+            std = cfg.pupil_noise_std_fraction * self._std(name)
+            noise = self._ar1_noise(t_len, std)
+            window[:, self.index[name]] += noise * right_valid.astype(np.float64)
         return window
 
     def _calibration_bias(self, window: np.ndarray) -> np.ndarray:
+        """Constant-per-window bias; paired eyes share a main bias + small residual."""
         cfg = self.config
-        idx = self.index
-        face = window[:, idx["face_detected"]] > 0.5
-        left_valid = (window[:, idx["left_eye_valid"]] > 0.5) & face
-        right_valid = (window[:, idx["right_eye_valid"]] > 0.5) & face
+        face = self._has_face(window)
+        left_valid = self._eye_valid(window, "left")
+        right_valid = self._eye_valid(window, "right")
 
-        yaw_b = self._rng.uniform(-cfg.yaw_bias_abs, cfg.yaw_bias_abs)
-        pitch_b = self._rng.uniform(-cfg.pitch_bias_abs, cfg.pitch_bias_abs)
-        roll_b = self._rng.uniform(-cfg.roll_bias_abs, cfg.roll_bias_abs)
-        window[:, idx["yaw"]] += yaw_b * face.astype(np.float64)
-        window[:, idx["pitch"]] += pitch_b * face.astype(np.float64)
-        window[:, idx["roll"]] += roll_b * face.astype(np.float64)
+        for name in self.pose_names:
+            bias = self._rng.normal(0.0, cfg.bias_std_fraction * self._std(name))
+            window[:, self.index[name]] += bias * face.astype(np.float64)
 
-        lx = self._rng.uniform(-cfg.pupil_bias_abs, cfg.pupil_bias_abs)
-        ly = self._rng.uniform(-cfg.pupil_bias_abs, cfg.pupil_bias_abs)
-        rx = self._rng.uniform(-cfg.pupil_bias_abs, cfg.pupil_bias_abs)
-        ry = self._rng.uniform(-cfg.pupil_bias_abs, cfg.pupil_bias_abs)
-        window[:, idx["left_pupil_rel_x"]] += lx * left_valid.astype(np.float64)
-        window[:, idx["left_pupil_rel_y"]] += ly * left_valid.astype(np.float64)
-        window[:, idx["right_pupil_rel_x"]] += rx * right_valid.astype(np.float64)
-        window[:, idx["right_pupil_rel_y"]] += ry * right_valid.astype(np.float64)
+        # Morphology pairs: aspect ratio / eyelid gap / gap_ratio.
+        for left_name, right_name in (
+            ("left_eye_aspect_ratio", "right_eye_aspect_ratio"),
+            ("left_eyelid_gap", "right_eyelid_gap"),
+            ("left_eyelid_gap_ratio", "right_eyelid_gap_ratio"),
+        ):
+            if left_name not in self.index and right_name not in self.index:
+                continue
+            ref = left_name if left_name in self.index else right_name
+            main = self._rng.normal(0.0, cfg.bias_std_fraction * self._std(ref))
+            resid_std = cfg.paired_eye_residual_fraction * cfg.bias_std_fraction * self._std(
+                ref
+            )
+            if left_name in self.index:
+                left_b = main + self._rng.normal(0.0, resid_std)
+                window[:, self.index[left_name]] += left_b * left_valid.astype(np.float64)
+            if right_name in self.index:
+                right_b = main + self._rng.normal(0.0, resid_std)
+                window[:, self.index[right_name]] += right_b * right_valid.astype(
+                    np.float64
+                )
+
+        # Pupil pairs: shared main + small residual (x and y separately).
+        for left_name, right_name in (
+            ("left_pupil_rel_x", "right_pupil_rel_x"),
+            ("left_pupil_rel_y", "right_pupil_rel_y"),
+            ("left_pupil_x", "right_pupil_x"),
+            ("left_pupil_y", "right_pupil_y"),
+        ):
+            if left_name not in self.index and right_name not in self.index:
+                continue
+            ref = left_name if left_name in self.index else right_name
+            main = self._rng.normal(0.0, cfg.bias_std_fraction * self._std(ref))
+            resid_std = cfg.paired_eye_residual_fraction * cfg.bias_std_fraction * self._std(
+                ref
+            )
+            if left_name in self.index:
+                left_b = main + self._rng.normal(0.0, resid_std)
+                window[:, self.index[left_name]] += left_b * left_valid.astype(np.float64)
+            if right_name in self.index:
+                right_b = main + self._rng.normal(0.0, resid_std)
+                window[:, self.index[right_name]] += right_b * right_valid.astype(
+                    np.float64
+                )
+        return window
+
+    def _pupil_jitter(self, window: np.ndarray) -> np.ndarray:
+        """Coherent bilateral pupil shift with small per-eye residual."""
+        cfg = self.config
+        left_valid = self._eye_valid(window, "left")
+        right_valid = self._eye_valid(window, "right")
+
+        # Horizontal: common dx across both pupil x channels.
+        x_names = [n for n in self._pupil_x_pair if n in self.index]
+        if x_names:
+            ref = x_names[0]
+            common = self._rng.normal(
+                0.0, cfg.pupil_common_std_fraction * self._std(ref)
+            )
+            for name in x_names:
+                resid = self._rng.normal(
+                    0.0, cfg.pupil_residual_std_fraction * self._std(name)
+                )
+                mask = left_valid if name.startswith("left_") else right_valid
+                window[:, self.index[name]] += (common + resid) * mask.astype(np.float64)
+
+        y_names = [n for n in self._pupil_y_pair if n in self.index]
+        if y_names:
+            ref = y_names[0]
+            common = self._rng.normal(
+                0.0, cfg.pupil_common_std_fraction * self._std(ref)
+            )
+            for name in y_names:
+                resid = self._rng.normal(
+                    0.0, cfg.pupil_residual_std_fraction * self._std(name)
+                )
+                mask = left_valid if name.startswith("left_") else right_valid
+                window[:, self.index[name]] += (common + resid) * mask.astype(np.float64)
         return window
 
     def _landmark_dropout(self, window: np.ndarray) -> np.ndarray:
+        """Zero one eye's validity + measurements for 1–3 consecutive frames."""
+        if not self.has_eye_validity:
+            return window
         cfg = self.config
         t_len = window.shape[0]
         duration = int(
@@ -225,16 +440,35 @@ class DrowsinessFeatureAugmenter:
         duration = min(duration, t_len)
         start = int(self._rng.integers(0, t_len - duration + 1))
         end = start + duration
-        which = self._rng.choice(["left", "right", "both"])
+        which = self._rng.choice(["left", "right"])
         idx = self.index
-        if which in ("left", "both"):
+        if which == "left":
             window[start:end, idx["left_eye_valid"]] = 0.0
-            for name in LEFT_EYE_CONTINUOUS:
+            for name in self.left_eye_continuous:
                 window[start:end, idx[name]] = 0.0
-        if which in ("right", "both"):
+        else:
             window[start:end, idx["right_eye_valid"]] = 0.0
-            for name in RIGHT_EYE_CONTINUOUS:
+            for name in self.right_eye_continuous:
                 window[start:end, idx[name]] = 0.0
+        return window
+
+    def _clamp_to_bounds(self, window: np.ndarray) -> np.ndarray:
+        if self.feature_bounds is None:
+            return window
+        low = self.feature_bounds.low
+        high = self.feature_bounds.high
+        binary = set(BINARY_FEATURE_NAMES) & self.feature_set
+        for name in self.feature_names:
+            if name in binary:
+                continue
+            col = self.index[name]
+            lo, hi = low[col], high[col]
+            if np.isfinite(lo) or np.isfinite(hi):
+                window[:, col] = np.clip(
+                    window[:, col],
+                    lo if np.isfinite(lo) else -np.inf,
+                    hi if np.isfinite(hi) else np.inf,
+                )
         return window
 
     def _print_debug(self, original: np.ndarray, augmented: np.ndarray) -> None:
@@ -243,39 +477,68 @@ class DrowsinessFeatureAugmenter:
         print("--- aug debug: augmented mean ---")
         print(np.mean(augmented, axis=0))
 
+    def config_summary(self) -> Dict[str, Any]:
+        return {
+            **self.config.to_dict(),
+            "dropout_enabled": self.dropout_enabled,
+            "pupil_jitter_enabled": self.pupil_jitter_enabled,
+            "left_morphology_features": list(self.left_morphology),
+            "right_morphology_features": list(self.right_morphology),
+            "left_pupil_features": list(self.left_pupil),
+            "right_pupil_features": list(self.right_pupil),
+        }
+
+
+# Backward-compatible alias.
+DrowsinessFeatureAugmenter = ClosedWindowAugmenter
+
 
 def enforce_feature_invariants(
-    window: np.ndarray, index: Mapping[str, int]
+    window: np.ndarray,
+    index: Mapping[str, int],
+    feature_names: Optional[Sequence[str]] = None,
 ) -> np.ndarray:
     """Clamp / zero features to satisfy schema invariants."""
     out = np.array(window, dtype=np.float64, copy=True)
+    names = list(feature_names) if feature_names is not None else list(index.keys())
+    feature_set = set(names)
+
     for name in BINARY_FEATURE_NAMES:
+        if name not in index:
+            continue
         col = index[name]
         out[:, col] = (out[:, col] >= 0.5).astype(np.float64)
 
-    face = out[:, index["face_detected"]]
-    no_face = face < 0.5
-    if np.any(no_face):
-        out[no_face, :] = 0.0
+    if "face_detected" in index:
+        face = out[:, index["face_detected"]]
+        no_face = face < 0.5
+        if np.any(no_face):
+            out[no_face, :] = 0.0
 
-    for ratio_names, pupil_names, valid_name in (
-        (LEFT_RATIO_NAMES, LEFT_PUPIL_NAMES, "left_eye_valid"),
-        (RIGHT_RATIO_NAMES, RIGHT_PUPIL_NAMES, "right_eye_valid"),
+    for side, morph_cands, pupil_cands, valid_name in (
+        ("left", LEFT_MORPHOLOGY_CANDIDATES, LEFT_PUPIL_CANDIDATES, "left_eye_valid"),
+        ("right", RIGHT_MORPHOLOGY_CANDIDATES, RIGHT_PUPIL_CANDIDATES, "right_eye_valid"),
     ):
-        valid = out[:, index[valid_name]] >= 0.5
-        invalid = ~valid
-        for name in ratio_names:
+        _ = side
+        morph = _present(morph_cands, feature_set)
+        pupils = _present(pupil_cands, feature_set)
+        if valid_name in index:
+            valid = out[:, index[valid_name]] >= 0.5
+            invalid = ~valid
+        else:
+            invalid = np.zeros(out.shape[0], dtype=bool)
+        for name in morph:
             col = index[name]
             out[:, col] = np.maximum(out[:, col], 0.0)
             out[invalid, col] = 0.0
-        for name in pupil_names:
+        for name in pupils:
             col = index[name]
-            out[:, col] = np.clip(out[:, col], 0.0, 1.0)
+            if name.endswith("_rel_x") or name.endswith("_rel_y"):
+                out[:, col] = np.clip(out[:, col], 0.0, 1.0)
             out[invalid, col] = 0.0
 
     np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
     return out
-
 
 @dataclass
 class FeatureStandardizer:
@@ -328,7 +591,9 @@ class FeatureStandardizer:
         out = np.array(window, dtype=np.float64, copy=True)
         mask = self.standardized_feature_mask
         out[:, mask] = (out[:, mask] - self.mean[mask]) / self.std[mask]
-        out = enforce_feature_invariants(out, feature_index_map(self.feature_names))
+        out = enforce_feature_invariants(
+            out, feature_index_map(self.feature_names), self.feature_names
+        )
         return out.astype(np.float32, copy=False)
 
     def to_checkpoint_dict(self) -> Dict[str, Any]:
@@ -363,8 +628,9 @@ class DrowsinessWindowDataset(Dataset):
         *,
         window_size: int = DEFAULT_WINDOW_SIZE,
         augment: bool = False,
-        augmenter: Optional[DrowsinessFeatureAugmenter] = None,
+        augmenter: Optional[ClosedWindowAugmenter] = None,
         standardizer: Optional[FeatureStandardizer] = None,
+        closed_only_augment: bool = True,
         require_contiguous_frame_ids: bool = True,
         verbose: bool = True,
     ) -> None:
@@ -378,6 +644,7 @@ class DrowsinessWindowDataset(Dataset):
         self.augment = bool(augment)
         self.augmenter = augmenter
         self.standardizer = standardizer
+        self.closed_only_augment = bool(closed_only_augment)
         self.require_contiguous_frame_ids = bool(require_contiguous_frame_ids)
         self.feature_names = list(frame_dataset.feature_names)
         self.class_to_idx = dict(CLASS_TO_IDX)
@@ -533,14 +800,14 @@ class DrowsinessWindowDataset(Dataset):
             pad = np.repeat(available[:1], pad_n, axis=0)
             window = np.concatenate([pad, available], axis=0)
 
-        if self.augment:
+        if self.augment and self._should_augment(meta):
             assert self.augmenter is not None
             window = self.augmenter(window)
         if self.standardizer is not None:
             window = self.standardizer.transform(window)
         else:
             window = enforce_feature_invariants(
-                window, feature_index_map(self.feature_names)
+                window, feature_index_map(self.feature_names), self.feature_names
             ).astype(np.float32)
 
         if not np.isfinite(window).all():
@@ -550,6 +817,13 @@ class DrowsinessWindowDataset(Dataset):
             )
         label = torch.tensor(meta["label_index"], dtype=torch.long)
         return torch.from_numpy(np.asarray(window, dtype=np.float32)), label
+
+    def _should_augment(self, meta: Mapping[str, Any]) -> bool:
+        if not self.augment:
+            return False
+        if not self.closed_only_augment:
+            return True
+        return meta.get("label_name") == "closed"
 
     def get_metadata(self, index: int) -> Dict[str, Any]:
         sample = self.samples[index]
@@ -615,24 +889,68 @@ def split_indices_by_session(
     return train_indices, val_indices, train_sessions, val_sessions
 
 
+def compute_closed_oversample_targets(
+    class_counts: Mapping[str, int],
+    *,
+    closed_sample_fraction: float,
+) -> Dict[str, float]:
+    """Target sampling probabilities preserving natural undefined frequency."""
+    if not 0.0 <= closed_sample_fraction <= 0.50:
+        raise ValueError(
+            f"closed_sample_fraction must be in [0.0, 0.50], got {closed_sample_fraction}"
+        )
+    n_total = int(sum(int(class_counts.get(name, 0)) for name in KEEP_CANONICAL_CLASSES))
+    if n_total <= 0:
+        raise ValueError("cannot compute oversample targets with empty train set")
+    n_undefined = int(class_counts.get("undefined", 0))
+    undefined_fraction = float(n_undefined) / float(n_total)
+    p_undefined = undefined_fraction
+    p_closed = (1.0 - p_undefined) * float(closed_sample_fraction)
+    p_open = (1.0 - p_undefined) * (1.0 - float(closed_sample_fraction))
+    return {
+        "closed": float(p_closed),
+        "open": float(p_open),
+        "undefined": float(p_undefined),
+    }
+
+
+def compute_sample_weights(
+    dataset: DrowsinessWindowDataset,
+    *,
+    closed_sample_fraction: float,
+) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, int]]:
+    """Per-sample weights for WeightedRandomSampler (closed oversampling)."""
+    counts = Counter(s["label_name"] for s in dataset.samples)
+    class_counts = {name: int(counts.get(name, 0)) for name in KEEP_CANONICAL_CLASSES}
+    targets = compute_closed_oversample_targets(
+        class_counts, closed_sample_fraction=closed_sample_fraction
+    )
+    weights: List[float] = []
+    for sample in dataset.samples:
+        name = sample["label_name"]
+        n_c = max(int(class_counts.get(name, 0)), 1)
+        weights.append(float(targets[name]) / float(n_c))
+    return torch.tensor(weights, dtype=torch.double), targets, class_counts
+
+
 def build_train_val_window_datasets(
     frame_dataset: DMDGazeFrameDataset,
     *,
     window_size: int = DEFAULT_WINDOW_SIZE,
     val_ratio: float = 0.2,
     seed: int = 42,
-    aug_config: Optional[AugmentationConfig] = None,
+    aug_config: Optional[ClosedAugmentationConfig] = None,
+    closed_augmentation: bool = True,
+    augmentation_seed: Optional[int] = None,
     verbose: bool = True,
 ) -> Tuple[DrowsinessWindowDataset, DrowsinessWindowDataset, FeatureStandardizer, Dict[str, Any]]:
     """Build filtered window datasets; fit standardizer on unaugmented train frames."""
-    # Provisional split on frame-level samples to gather train session keys.
     train_idx, val_idx, train_sessions, val_sessions = split_indices_by_session(
         frame_dataset, val_ratio=val_ratio, seed=seed
     )
     del train_idx, val_idx
 
     train_sessions_set = set(train_sessions)
-    # Restrict frame views by session for fitting stats / separate window builds.
     train_frame_indices = [
         i
         for i, s in enumerate(frame_dataset.samples)
@@ -642,17 +960,27 @@ def build_train_val_window_datasets(
         [frame_dataset.samples[i]["features"].numpy() for i in train_frame_indices],
         axis=0,
     ).astype(np.float32)
+    # Normalization stats from original unaugmented training frames only.
     standardizer = FeatureStandardizer.fit(train_frames, frame_dataset.feature_names)
     std_by_name = {
         name: float(standardizer.std[idx])
         for idx, name in enumerate(standardizer.feature_names)
     }
-    aug_config = aug_config or AugmentationConfig()
-    augmenter = DrowsinessFeatureAugmenter(
+    aug_config = aug_config or ClosedAugmentationConfig()
+    feature_bounds = fit_feature_bounds(
+        train_frames,
+        frame_dataset.feature_names,
+        percentile_low=aug_config.percentile_low,
+        percentile_high=aug_config.percentile_high,
+        margin=aug_config.percentile_margin,
+    )
+    aug_seed = int(seed if augmentation_seed is None else augmentation_seed)
+    augmenter = ClosedWindowAugmenter(
         feature_names=frame_dataset.feature_names,
         config=aug_config,
         train_feature_std=std_by_name,
-        seed=seed,
+        feature_bounds=feature_bounds,
+        seed=aug_seed,
     )
 
     full_windows = DrowsinessWindowDataset(
@@ -662,14 +990,13 @@ def build_train_val_window_datasets(
         standardizer=None,
         verbose=verbose,
     )
-    # Rebuild train/val as separate datasets with correct augment flags.
-    # Filter samples by session after constructing from full timeline.
     train_window = DrowsinessWindowDataset(
         frame_dataset,
         window_size=window_size,
-        augment=True,
-        augmenter=augmenter,
+        augment=bool(closed_augmentation),
+        augmenter=augmenter if closed_augmentation else None,
         standardizer=standardizer,
+        closed_only_augment=True,
         verbose=False,
     )
     val_window = DrowsinessWindowDataset(
@@ -678,6 +1005,7 @@ def build_train_val_window_datasets(
         augment=False,
         augmenter=None,
         standardizer=standardizer,
+        closed_only_augment=True,
         verbose=False,
     )
     train_window.samples = [
@@ -699,11 +1027,19 @@ def build_train_val_window_datasets(
         "counts_before_filter": full_windows.counts_before_filter,
         "counts_after_filter": full_windows.counts_after_filter,
         "removed_transition_windows": full_windows.removed_transition_windows,
-        "augmentation_config": aug_config.to_dict(),
+        "train_class_counts": dict(train_window.class_counts),
+        "val_class_counts": dict(val_window.class_counts),
+        "augmentation_config": augmenter.config_summary(),
+        "closed_augmentation": bool(closed_augmentation),
+        "augmentation_seed": aug_seed,
+        "feature_bounds": feature_bounds.to_dict(),
         "val_ratio": val_ratio,
         "seed": seed,
         "window_size": window_size,
         "sampling_rate_hz": DEFAULT_SAMPLING_RATE_HZ,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "feature_names": list(DROWSINESS_FEATURE_NAMES),
+        "feature_count": FEATURE_COUNT,
     }
     if verbose:
         print("=== train/val window split ===")
@@ -720,7 +1056,6 @@ def _worker_init_fn(seed: int):
         random.seed(worker_seed)
         np.random.seed(worker_seed)
         torch.manual_seed(worker_seed)
-        # Reseed dataset augmenter if present (train workers only).
         info = torch.utils.data.get_worker_info()
         if info is None:
             return
@@ -744,8 +1079,9 @@ def make_train_val_loaders(
     pin_memory: Optional[bool] = None,
     device: Optional[object] = None,
     split_info: Optional[Dict[str, Any]] = None,
+    closed_sample_fraction: Optional[float] = DEFAULT_CLOSED_SAMPLE_FRACTION,
 ) -> Tuple[DataLoader, DataLoader, Dict[str, Any]]:
-    """Build shuffled train / unshuffled val loaders with seeded workers."""
+    """Build train/val loaders; train uses WeightedRandomSampler when fraction>0."""
     if pin_memory is None:
         if device is not None and getattr(device, "type", None) == "cuda":
             pin_memory = True
@@ -762,11 +1098,45 @@ def make_train_val_loaders(
         "persistent_workers": num_workers > 0,
         "worker_init_fn": worker_init,
     }
-    train_loader = DataLoader(
-        train_dataset, shuffle=True, generator=g, **common
-    )
-    val_loader = DataLoader(val_dataset, shuffle=False, **common)
+
     info: Dict[str, Any] = dict(split_info or {})
+    use_sampler = (
+        closed_sample_fraction is not None and float(closed_sample_fraction) > 0.0
+    )
+    sampler = None
+    if use_sampler:
+        if not hasattr(train_dataset, "samples"):
+            raise TypeError(
+                "closed oversampling requires a dataset exposing .samples metadata"
+            )
+        weights, targets, class_counts = compute_sample_weights(
+            train_dataset,  # type: ignore[arg-type]
+            closed_sample_fraction=float(closed_sample_fraction),
+        )
+        sampler = WeightedRandomSampler(
+            weights=weights,
+            num_samples=len(train_dataset),
+            replacement=True,
+            generator=g,
+        )
+        train_loader = DataLoader(
+            train_dataset, shuffle=False, sampler=sampler, **common
+        )
+        info["closed_sample_fraction"] = float(closed_sample_fraction)
+        info["sampler_target_distribution"] = dict(targets)
+        info["sampler_class_counts"] = dict(class_counts)
+        info["sampler_enabled"] = True
+    else:
+        train_loader = DataLoader(
+            train_dataset, shuffle=True, generator=g, **common
+        )
+        info["closed_sample_fraction"] = (
+            float(closed_sample_fraction) if closed_sample_fraction is not None else 0.0
+        )
+        info["sampler_enabled"] = False
+        info["sampler_target_distribution"] = None
+
+    val_loader = DataLoader(val_dataset, shuffle=False, **common)
     info.update(
         {
             "train_samples": len(train_dataset),
@@ -844,13 +1214,18 @@ __all__ = [
     "DROWSINESS_FEATURE_NAMES",
     "FEATURE_NAMES",
     "FEATURE_SCHEMA_VERSION",
+    "FEATURE_COUNT",
     "LANDMARKS_DIR",
     "DEFAULT_WINDOW_SIZE",
     "DEFAULT_SAMPLING_RATE_HZ",
+    "DEFAULT_CLOSED_SAMPLE_FRACTION",
     "CLASS_TO_IDX",
     "IDX_TO_CLASS",
+    "ClosedAugmentationConfig",
     "AugmentationConfig",
+    "ClosedWindowAugmenter",
     "DrowsinessFeatureAugmenter",
+    "FeatureBounds",
     "FeatureStandardizer",
     "DMDGazeFrameDataset",
     "DrowsinessWindowDataset",
@@ -860,6 +1235,9 @@ __all__ = [
     "make_session_split_loaders",
     "make_train_val_loaders",
     "build_train_val_window_datasets",
+    "compute_closed_oversample_targets",
+    "compute_sample_weights",
+    "fit_feature_bounds",
     "seed_everything",
     "enforce_feature_invariants",
     "feature_index_map",

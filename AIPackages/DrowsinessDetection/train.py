@@ -32,17 +32,18 @@ if str(_SRC_DIR) not in sys.path:
 
 from dataloader import (  # noqa: E402
     ANNS_DIR,
+    DEFAULT_CLOSED_SAMPLE_FRACTION,
     DEFAULT_SAMPLING_RATE_HZ,
     DEFAULT_WINDOW_SIZE,
     DROWSINESS_FEATURE_NAMES,
     LANDMARKS_DIR,
-    AugmentationConfig,
+    ClosedAugmentationConfig,
     DMDGazeFrameDataset,
     build_train_val_window_datasets,
     make_train_val_loaders,
     seed_everything,
 )
-from feature_contract import FEATURE_SCHEMA_VERSION  # noqa: E402
+from feature_contract import FEATURE_COUNT, FEATURE_SCHEMA_VERSION  # noqa: E402
 from label_contract import CLASS_TO_IDX, IDX_TO_CLASS, NUM_CLASSES  # noqa: E402
 from device import (  # noqa: E402
     DEFAULT_GPU_ID,
@@ -63,6 +64,13 @@ DEFAULT_SEED = 42
 DEFAULT_EARLY_STOPPING_PATIENCE = 7
 DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parent / "saved_weights"
 
+# Explicit experimental inverse-frequency weights (unsafe with oversampling).
+EXPERIMENTAL_CLASS_WEIGHTS = [
+    2.414783496136463,
+    0.38792861157953906,
+    123.6044776119403,
+]
+
 
 def set_seed(seed: int) -> None:
     seed_everything(seed)
@@ -80,6 +88,7 @@ def save_checkpoint(
     args: argparse.Namespace,
     standardizer_payload: Dict[str, object],
     augmentation_config: Dict[str, object],
+    sampling_config: Dict[str, object],
     model_config: Dict[str, object],
     best_val_loss: float,
     best_val_accuracy: float,
@@ -107,6 +116,7 @@ def save_checkpoint(
         "feature_std": standardizer_payload["feature_std"],
         "standardized_feature_mask": standardizer_payload["standardized_feature_mask"],
         "augmentation_config": dict(augmentation_config),
+        "sampling_config": dict(sampling_config),
         "split_info": {
             "train_sessions": list(split_info["train_sessions"]),
             "val_sessions": list(split_info["val_sessions"]),
@@ -124,6 +134,14 @@ def save_checkpoint(
                 "removed_transition_windows"
             ),
             "class_weights": split_info.get("class_weights"),
+            "sampler_enabled": split_info.get("sampler_enabled"),
+            "sampler_target_distribution": split_info.get(
+                "sampler_target_distribution"
+            ),
+            "closed_sample_fraction": split_info.get("closed_sample_fraction"),
+            "closed_augmentation": split_info.get("closed_augmentation"),
+            "augmentation_seed": split_info.get("augmentation_seed"),
+            "loss_mode": split_info.get("loss_mode"),
         },
         "args": vars(args),
     }
@@ -202,6 +220,7 @@ def train_one_epoch(
 ) -> Dict[str, float]:
     model.train()
     meter = MulticlassMetricMeter(num_classes)
+    sampled_counts = {IDX_TO_CLASS[i]: 0 for i in range(num_classes)}
     progress = tqdm(
         loader,
         desc=f"train {epoch}/{total_epochs}",
@@ -219,13 +238,20 @@ def train_one_epoch(
         optimizer.step()
 
         meter.update(logits, labels, loss=loss)
+        for label_index in labels.detach().cpu().tolist():
+            sampled_counts[IDX_TO_CLASS[int(label_index)]] += 1
         stats = meter.compute()
         progress.set_postfix(
             loss=f"{stats['loss']:.4f}",
             acc=f"{stats['accuracy']:.4f}",
         )
-    return meter.compute()
-
+    result = meter.compute()
+    result["sampled_class_counts"] = sampled_counts
+    total = max(sum(sampled_counts.values()), 1)
+    result["sampled_class_fractions"] = {
+        name: float(count) / float(total) for name, count in sampled_counts.items()
+    }
+    return result
 
 @torch.no_grad()
 def validate_one_epoch(
@@ -425,18 +451,99 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         help="Path for the validation loss/accuracy curve PNG "
         "(default: <checkpoint-dir>/val_loss_accuracy_curves.png).",
     )
+    parser.add_argument(
+        "--closed-augmentation",
+        dest="closed_augmentation",
+        action="store_true",
+        default=True,
+        help="Enable closed-only on-the-fly augmentation (default: on).",
+    )
+    parser.add_argument(
+        "--no-closed-augmentation",
+        dest="closed_augmentation",
+        action="store_false",
+        help="Disable closed-only augmentation.",
+    )
+    parser.add_argument(
+        "--closed-sample-fraction",
+        type=float,
+        default=DEFAULT_CLOSED_SAMPLE_FRACTION,
+        help="Desired closed fraction among open+closed train samples "
+        f"(default: {DEFAULT_CLOSED_SAMPLE_FRACTION}, range 0.0–0.50).",
+    )
+    parser.add_argument(
+        "--augmentation-seed",
+        type=int,
+        default=None,
+        help="Seed for closed-window augmenter RNG (default: --seed).",
+    )
+    parser.add_argument(
+        "--morphology-probability",
+        type=float,
+        default=0.70,
+        help="Probability of eye-morphology scaling (default: 0.70).",
+    )
+    parser.add_argument(
+        "--measurement-noise-probability",
+        type=float,
+        default=0.50,
+        help="Probability of temporally correlated measurement noise (default: 0.50).",
+    )
+    parser.add_argument(
+        "--calibration-bias-probability",
+        type=float,
+        default=0.50,
+        help="Probability of per-window calibration bias (default: 0.50).",
+    )
+    parser.add_argument(
+        "--pupil-jitter-probability",
+        type=float,
+        default=0.30,
+        help="Probability of coherent pupil jitter when pupil features exist "
+        "(default: 0.30).",
+    )
+    parser.add_argument(
+        "--landmark-dropout-probability",
+        type=float,
+        default=0.03,
+        help="Probability of eye-landmark dropout when validity masks exist "
+        "(default: 0.03).",
+    )
+    parser.add_argument(
+        "--use-class-weights",
+        action="store_true",
+        default=False,
+        help="Experimental: use fixed inverse-frequency class weights. "
+        "Incompatible with closed oversampling (closed-sample-fraction > 0).",
+    )
     return parser.parse_args(argv)
-
 
 def main(argv: Optional[list] = None) -> int:
     args = parse_args(argv)
+    if not 0.0 <= float(args.closed_sample_fraction) <= 0.50:
+        raise ValueError(
+            f"--closed-sample-fraction must be in [0.0, 0.50], "
+            f"got {args.closed_sample_fraction}"
+        )
+    sampler_enabled = float(args.closed_sample_fraction) > 0.0
+    if sampler_enabled and bool(args.use_class_weights):
+        raise ValueError(
+            "Cannot enable --use-class-weights together with closed-window "
+            "oversampling (--closed-sample-fraction > 0). Disable one of them."
+        )
+
     set_seed(args.seed)
     device = resolve_device(args.gpu, require_cuda=not args.allow_cpu)
     configure_cuda(device)
     checkpoint_dir = args.checkpoint_dir.expanduser().resolve()
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+    print("=== frozen feature schema ===")
+    print(f"feature_schema_version: {FEATURE_SCHEMA_VERSION}")
+    print(f"feature_count: {FEATURE_COUNT}")
+    print(f"feature_names: {list(DROWSINESS_FEATURE_NAMES)}")
     print(f"checkpoint_dir: {checkpoint_dir}")
+    print(f"random seed: {args.seed}")
 
     frame_dataset = DMDGazeFrameDataset(
         anns_dir=args.anns_dir,
@@ -446,13 +553,28 @@ def main(argv: Optional[list] = None) -> int:
     if args.window_size < 1:
         raise ValueError(f"window_size must be positive, got {args.window_size}")
 
+    aug_config = ClosedAugmentationConfig(
+        morphology_p=float(args.morphology_probability),
+        noise_p=float(args.measurement_noise_probability),
+        bias_p=float(args.calibration_bias_probability),
+        pupil_jitter_p=float(args.pupil_jitter_probability),
+        dropout_p=float(args.landmark_dropout_probability),
+    )
+    aug_seed = (
+        int(args.seed)
+        if args.augmentation_seed is None
+        else int(args.augmentation_seed)
+    )
+
     train_dataset, val_dataset, standardizer, split_info = (
         build_train_val_window_datasets(
             frame_dataset,
             window_size=args.window_size,
             val_ratio=args.val_ratio,
             seed=args.seed,
-            aug_config=AugmentationConfig(),
+            aug_config=aug_config,
+            closed_augmentation=bool(args.closed_augmentation),
+            augmentation_seed=aug_seed,
             verbose=True,
         )
     )
@@ -464,7 +586,41 @@ def main(argv: Optional[list] = None) -> int:
         num_workers=args.num_workers,
         device=device,
         split_info=split_info,
+        closed_sample_fraction=float(args.closed_sample_fraction),
     )
+
+    train_counts = dict(getattr(train_dataset, "class_counts", {}))
+    val_counts = dict(getattr(val_dataset, "class_counts", {}))
+    train_total = max(sum(int(v) for v in train_counts.values()), 1)
+    val_total = max(sum(int(v) for v in val_counts.values()), 1)
+    majority_val = max(val_counts, key=lambda k: val_counts[k]) if val_counts else "n/a"
+    majority_val_frac = (
+        float(val_counts[majority_val]) / float(val_total) if val_counts else 0.0
+    )
+
+    print("=== label distributions ===")
+    print(f"train counts: {train_counts}")
+    print(
+        "train fractions: "
+        + str({k: float(v) / float(train_total) for k, v in train_counts.items()})
+    )
+    print(f"val counts:   {val_counts}")
+    print(
+        "val fractions: "
+        + str({k: float(v) / float(val_total) for k, v in val_counts.items()})
+    )
+    print(
+        f"majority-class validation baseline: {majority_val} "
+        f"({majority_val_frac:.4f})"
+    )
+    print("=== augmentation configuration ===")
+    print(split_info.get("augmentation_config"))
+    print(f"closed_augmentation: {args.closed_augmentation}")
+    print(f"augmentation_seed: {aug_seed}")
+    print("=== sampler configuration ===")
+    print(f"sampler_enabled: {split_info.get('sampler_enabled')}")
+    print(f"closed_sample_fraction: {args.closed_sample_fraction}")
+    print(f"sampler_target_distribution: {split_info.get('sampler_target_distribution')}")
     print(f"TCN window_size: {args.window_size}")
     print(f"DataLoader pin_memory={split_info['pin_memory']}")
     print(
@@ -478,13 +634,22 @@ def main(argv: Optional[list] = None) -> int:
 
     standardizer_payload = standardizer.to_checkpoint_dict()
     augmentation_config = dict(split_info.get("augmentation_config") or {})
+    sampling_config = {
+        "closed_sample_fraction": float(args.closed_sample_fraction),
+        "sampler_enabled": bool(split_info.get("sampler_enabled")),
+        "sampler_target_distribution": split_info.get("sampler_target_distribution"),
+        "closed_augmentation": bool(args.closed_augmentation),
+        "augmentation_seed": aug_seed,
+        "use_class_weights": bool(args.use_class_weights),
+    }
 
     num_classes = NUM_CLASSES
     assert num_classes == len(CLASS_TO_IDX)
+    assert FEATURE_COUNT == len(DROWSINESS_FEATURE_NAMES)
     model_config = {
         "arch": "tcn",
         "num_classes": num_classes,
-        "input_dim": len(DROWSINESS_FEATURE_NAMES),
+        "input_dim": FEATURE_COUNT,
         "channels": 64,
         "kernel_size": 3,
         "dilations": (1, 2, 4),
@@ -493,19 +658,45 @@ def main(argv: Optional[list] = None) -> int:
     }
     model = build_model(
         num_classes=num_classes,
-        input_dim=len(DROWSINESS_FEATURE_NAMES),
+        input_dim=FEATURE_COUNT,
         dropout=args.dropout,
     ).to(device)
     print(f"model device: {next(model.parameters()).device}")
     print(f"trainable parameters: {model.num_trainable_parameters:,}")
     print(f"num_classes={num_classes} from CLASS_TO_IDX={CLASS_TO_IDX}")
+    print(f"model input_dim={FEATURE_COUNT} (frozen schema)")
 
-    class_weights = compute_class_weights(dict(train_dataset.class_counts))
-    if class_weights is not None:
-        split_info["class_weights"] = class_weights.tolist()
+    if sampler_enabled:
+        class_weights = None
+        loss_mode = "unweighted_ce_with_oversampling"
+        print(
+            "loss: unweighted CrossEntropyLoss "
+            "(oversampling active; class weights disabled)"
+        )
+    elif args.use_class_weights:
+        class_weights = torch.tensor(EXPERIMENTAL_CLASS_WEIGHTS, dtype=torch.float32)
+        if class_weights.numel() != num_classes:
+            raise ValueError(
+                f"EXPERIMENTAL_CLASS_WEIGHTS length {class_weights.numel()} "
+                f"!= num_classes {num_classes}"
+            )
+        loss_mode = "experimental_fixed_class_weights"
+        print(f"loss: weighted CE with experimental weights={class_weights.tolist()}")
         class_weights = class_weights.to(device)
     else:
-        split_info["class_weights"] = None
+        class_weights = compute_class_weights(dict(train_dataset.class_counts))
+        if class_weights is not None:
+            loss_mode = "auto_inverse_frequency_weights"
+            class_weights = class_weights.to(device)
+        else:
+            loss_mode = "unweighted_ce"
+    split_info["class_weights"] = (
+        class_weights.detach().cpu().tolist() if class_weights is not None else None
+    )
+    split_info["loss_mode"] = loss_mode
+    sampling_config["loss_mode"] = loss_mode
+    print(f"active loss configuration: {loss_mode}")
+
     criterion = build_loss(
         class_weights=class_weights,
         label_smoothing=args.label_smoothing,
@@ -550,6 +741,7 @@ def main(argv: Optional[list] = None) -> int:
             "args": args,
             "standardizer_payload": standardizer_payload,
             "augmentation_config": augmentation_config,
+            "sampling_config": sampling_config,
             "model_config": model_config,
             "best_val_loss": best_val_loss,
             "best_val_accuracy": best_val_accuracy,
@@ -567,6 +759,23 @@ def main(argv: Optional[list] = None) -> int:
             epoch,
             args.epochs,
         )
+        if epoch == 1:
+            print("=== actual sampled class distribution (epoch 1) ===")
+            print(f"counts: {train_metrics.get('sampled_class_counts')}")
+            print(f"fractions: {train_metrics.get('sampled_class_fractions')}")
+            split_info["epoch1_sampled_class_counts"] = train_metrics.get(
+                "sampled_class_counts"
+            )
+            split_info["epoch1_sampled_class_fractions"] = train_metrics.get(
+                "sampled_class_fractions"
+            )
+            sampling_config["epoch1_sampled_class_counts"] = train_metrics.get(
+                "sampled_class_counts"
+            )
+            sampling_config["epoch1_sampled_class_fractions"] = train_metrics.get(
+                "sampled_class_fractions"
+            )
+
         val_metrics = validate_one_epoch(
             model,
             val_loader,
@@ -676,6 +885,7 @@ def main(argv: Optional[list] = None) -> int:
             args=args,
             standardizer_payload=standardizer_payload,
             augmentation_config=augmentation_config,
+            sampling_config=sampling_config,
             model_config=model_config,
             best_val_loss=float(acc_val["loss"]),
             best_val_accuracy=float(acc_val["accuracy"]),
@@ -703,6 +913,8 @@ def main(argv: Optional[list] = None) -> int:
                     [IDX_TO_CLASS[j] for j in range(num_classes)]
                 )
             },
+            "sampling_config": sampling_config,
+            "augmentation_config": augmentation_config,
         }
         report_path = checkpoint_dir / "best_accuracy_v2_metrics.json"
         report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

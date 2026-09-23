@@ -29,7 +29,7 @@ struct DriveView: View {
     #endif
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 8) {
@@ -48,6 +48,14 @@ struct DriveView: View {
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 8)
+
+            // TEMP: pin wake banner above the map when closed is detected (5s hold).
+            if drowsinessRemote.isWakeUpAlertActive {
+                wakeUpDebugBanner
+                    .padding(.horizontal, 16)
+                    .padding(.top, 44)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -59,6 +67,8 @@ struct DriveView: View {
         .animation(.easeInOut(duration: 0.2), value: speedMonitor.speedMPH)
         .animation(.easeInOut(duration: 0.2), value: warningBanner?.title)
         .animation(.easeInOut(duration: 0.2), value: drowsinessRemote.isWakeUpAlertActive)
+        .animation(.easeInOut(duration: 0.2), value: drowsinessRemote.latestPrediction?.label)
+        .animation(.easeInOut(duration: 0.2), value: wakeUpDebugBannerTitle)
         .onAppear {
             startMultiCamIfNeeded()
             speedMonitor.start()
@@ -95,8 +105,12 @@ struct DriveView: View {
         .onChange(of: laneDetector.result.state) { _, _ in
             syncADASAlerts()
         }
-        .onChange(of: drowsinessRemote.isWakeUpAlertActive) { _, _ in
+        .onChange(of: drowsinessRemote.isWakeUpAlertActive) { wasActive, isActive in
             syncADASAlerts()
+            // Beep only when the banner becomes visible (rising edge).
+            if isActive, !wasActive {
+                alertManager.playWakeUpBeep()
+            }
         }
         .onChange(of: speedMonitor.speedMPH) { _, _ in
             syncLaneSpeedGate()
@@ -141,6 +155,20 @@ struct DriveView: View {
 
             onDeviceFooter
         }
+    }
+
+    /// Wake banner when closed eyes are detected (held 5s by the coordinator).
+    private var wakeUpDebugBanner: some View {
+        WarningBannerView(title: wakeUpDebugBannerTitle, style: .urgent)
+            .accessibilityLabel(wakeUpDebugBannerTitle)
+    }
+
+    private var wakeUpDebugBannerTitle: String {
+        if let prediction = drowsinessRemote.latestPrediction {
+            let confidence = String(format: "%.0f%%", prediction.confidence * 100.0)
+            return "Wake up · \(prediction.label) (\(confidence))"
+        }
+        return "Wake up · closed"
     }
 
     // MARK: - Top bar
@@ -444,9 +472,8 @@ struct DriveView: View {
             return ("SLOW DOWN", .urgent)
         }
 
-        // Same banner slot as Driver not detected; wake-up replaces it when active.
         if drowsinessRemote.isWakeUpAlertActive {
-            return ("Wake up", .caution)
+            return (wakeUpDebugBannerTitle, .caution)
         }
 
         if driverMonitor.attentionState == .noFace {
