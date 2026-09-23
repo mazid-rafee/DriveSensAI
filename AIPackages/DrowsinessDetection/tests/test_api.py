@@ -1,4 +1,4 @@
-"""API contract tests for DrowsinessDetection FastAPI server (schema v2, 3-class)."""
+"""API contract tests for DrowsinessDetection FastAPI server (schema v3, 3-class)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 # Force deterministic local settings before importing the app module.
 os.environ["DROWSINESS_DEVICE"] = "cpu"
-os.environ["DROWSINESS_CHECKPOINT_PATH"] = "saved_weights/best_accuracy_v2.pt"
+os.environ["DROWSINESS_CHECKPOINT_PATH"] = "saved_weights/schema_v3_smoke.pt"
 os.environ["DROWSINESS_API_KEY"] = "test-api-key-please-change"
 os.environ["DROWSINESS_SAMPLING_RATE_HZ"] = "15.0"
 
@@ -58,12 +58,10 @@ def _valid_request(contract: dict[str, Any], *, mutate: dict[str, Any] | None = 
         values[5] = 1.0  # right_eye_valid
         values[6] = 0.25  # left_eye_aspect_ratio
         values[7] = 0.25  # right_eye_aspect_ratio
-        values[8] = 0.18
-        values[9] = 0.18
-        values[10] = 0.45
-        values[11] = 0.50
-        values[12] = 0.55
-        values[13] = 0.50
+        values[8] = 0.45  # left_pupil_rel_x
+        values[9] = 0.50  # left_pupil_rel_y
+        values[10] = 0.55  # right_pupil_rel_x
+        values[11] = 0.50  # right_pupil_rel_y
         samples.append(
             {
                 "timestamp_ms": base_ts + index * 67,
@@ -86,10 +84,10 @@ def _valid_request(contract: dict[str, Any], *, mutate: dict[str, Any] | None = 
 
 def test_health_returns_model_contract(client: TestClient, model_contract: dict[str, Any]) -> None:
     assert model_contract["status"] == "ok"
-    assert model_contract["model_version"] == "best_accuracy_v2"
+    assert model_contract["model_version"] == "schema_v3_smoke"
     assert model_contract["feature_schema_version"] == FEATURE_SCHEMA_VERSION
     assert model_contract["schema_version"] == FEATURE_SCHEMA_VERSION
-    assert model_contract["feature_count"] == 14
+    assert model_contract["feature_count"] == 12
     assert model_contract["window_frames"] >= 1
     assert model_contract["sampling_rate_hz"] == 15.0
     assert model_contract["class_names"] == [IDX_TO_CLASS[i] for i in range(len(CLASS_TO_IDX))]

@@ -44,8 +44,6 @@ def _valid_frame(*, yaw: float = 0.1, left_ear: float = 0.25) -> np.ndarray:
     row[INDEX["right_eye_valid"]] = 1.0
     row[INDEX["left_eye_aspect_ratio"]] = left_ear
     row[INDEX["right_eye_aspect_ratio"]] = 0.27
-    row[INDEX["left_eyelid_gap_ratio"]] = 0.18
-    row[INDEX["right_eyelid_gap_ratio"]] = 0.19
     row[INDEX["left_pupil_rel_x"]] = 0.45
     row[INDEX["left_pupil_rel_y"]] = 0.52
     row[INDEX["right_pupil_rel_x"]] = 0.55
@@ -134,8 +132,6 @@ def test_closed_augmenter_preserves_shape_and_does_not_mutate_input() -> None:
     for name in (
         "left_eye_aspect_ratio",
         "right_eye_aspect_ratio",
-        "left_eyelid_gap_ratio",
-        "right_eyelid_gap_ratio",
     ):
         assert np.all(out[:, INDEX[name]] >= 0.0)
     for name in (

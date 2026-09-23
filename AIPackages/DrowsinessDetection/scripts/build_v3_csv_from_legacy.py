@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Build ``*_v3.csv`` files from legacy or v2 Apple Vision CSVs.
+"""Build ``*_v3.csv`` files from schema-v2 Apple Vision CSVs.
 
-Schema v3 keeps eye-validity flags and drops pupil coordinates.
-Prefer converting from ``*_v2.csv`` (already eye-local) when available;
-otherwise alias from legacy Absolute gap / EAR fields.
+Schema v3 keeps EAR + pupil-relative coordinates and drops eyelid-gap-ratio
+channels (12 features). Prefer converting from ``*_v2.csv`` when available.
 """
 
 from __future__ import annotations
@@ -24,6 +23,7 @@ from feature_contract import CSV_SUFFIX, DROWSINESS_FEATURE_NAMES  # noqa: E402
 LEGACY_SUFFIX = "_rgb_face.apple_drowsiness.csv"
 V2_SUFFIX = "_rgb_face.apple_drowsiness_v2.csv"
 
+# Map legacy absolute / ratio columns onto the v3 feature set.
 LEGACY_ALIASES = {
     "face_detected": "face_detected",
     "yaw": "yaw",
@@ -33,8 +33,15 @@ LEGACY_ALIASES = {
     "right_eye_valid": "right_eye_valid",
     "left_eye_aspect_ratio": "left_eye_aspect_ratio",
     "right_eye_aspect_ratio": "right_eye_aspect_ratio",
-    "left_eyelid_gap": "left_eyelid_gap_ratio",
-    "right_eyelid_gap": "right_eyelid_gap_ratio",
+    "left_pupil_rel_x": "left_pupil_rel_x",
+    "left_pupil_rel_y": "left_pupil_rel_y",
+    "right_pupil_rel_x": "right_pupil_rel_x",
+    "right_pupil_rel_y": "right_pupil_rel_y",
+    # Fallback when only raw pupil coords exist (not eye-local).
+    "left_pupil_x": "left_pupil_rel_x",
+    "left_pupil_y": "left_pupil_rel_y",
+    "right_pupil_x": "right_pupil_rel_x",
+    "right_pupil_y": "right_pupil_rel_y",
 }
 
 
@@ -63,14 +70,18 @@ def _finalize_row(out: dict[str, float]) -> dict[str, float]:
         out[valid_key] = valid
         if valid < 0.5:
             out[f"{side}_eye_aspect_ratio"] = 0.0
-            out[f"{side}_eyelid_gap_ratio"] = 0.0
+            out[f"{side}_pupil_rel_x"] = 0.0
+            out[f"{side}_pupil_rel_y"] = 0.0
         else:
             out[f"{side}_eye_aspect_ratio"] = max(0.0, out[f"{side}_eye_aspect_ratio"])
-            out[f"{side}_eyelid_gap_ratio"] = max(0.0, out[f"{side}_eyelid_gap_ratio"])
+            for axis in ("x", "y"):
+                key = f"{side}_pupil_rel_{axis}"
+                out[key] = min(1.0, max(0.0, out[key]))
     return out
 
 
 def convert_from_v2(src: Path, dst: Path) -> int:
+    """Drop eyelid-gap-ratio columns; keep pupils and EAR."""
     with src.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
@@ -97,8 +108,16 @@ def convert_from_legacy(src: Path, dst: Path) -> int:
             raise ValueError(f"{src.name}: empty header")
         rows_out = []
         for row in reader:
-            out = {"frame_index": int(str(row["frame_index"]).strip())}
+            out = {name: 0.0 for name in DROWSINESS_FEATURE_NAMES}
+            out["frame_index"] = int(str(row["frame_index"]).strip())
             for legacy, v3_name in LEGACY_ALIASES.items():
+                if legacy not in row:
+                    continue
+                # Prefer already-relative pupil columns over raw aliases.
+                if v3_name.startswith(("left_pupil_rel_", "right_pupil_rel_")):
+                    if legacy.endswith(("_x", "_y")) and "rel" not in legacy:
+                        if row.get(v3_name) not in (None, ""):
+                            continue
                 out[v3_name] = _finite(row.get(legacy))
             rows_out.append(_finalize_row(out))
 
@@ -163,7 +182,7 @@ def main() -> int:
             print(f"wrote {dst.name} rows={n} (from legacy)")
             converted += 1
         print(
-            "WARNING: eyelid_gap_ratio aliased from legacy absolute gap columns; "
+            "WARNING: pupil_rel_* may be aliased from legacy absolute pupil columns; "
             "prefer re-extraction when possible."
         )
     else:

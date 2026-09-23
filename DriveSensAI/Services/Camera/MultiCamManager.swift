@@ -441,6 +441,12 @@ nonisolated final class MultiCamManager: NSObject, AVCaptureVideoDataOutputSampl
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         if output === frontVideoOutput {
+            #if DEBUG
+            DrowsinessOrientationDebugProbe.updateConnection(
+                rotationDegrees: connection.videoRotationAngle,
+                mirrored: connection.isVideoMirrored
+            )
+            #endif
             onFrontFrame?(pixelBuffer)
         } else if output === rearVideoOutput {
             onRearFrame?(pixelBuffer)

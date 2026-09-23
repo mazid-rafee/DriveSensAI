@@ -40,12 +40,13 @@ RAW_EYES_STATE_TO_CANONICAL: Dict[str, Optional[str]] = {
     "close": "closed",
     "open": "open",
     "undefined": "undefined",
-    # Explicitly excluded from training targets (not mapped to open/closed).
+    # Transition into closed eyes: kept and trained as closed.
+    "closing": "closed",
+    # Transition into open eyes: still excluded from training targets.
     "opening": None,
-    "closing": None,
 }
 
-EXCLUDED_RAW_EYES_STATES: FrozenSet[str] = frozenset({"opening", "closing"})
+EXCLUDED_RAW_EYES_STATES: FrozenSet[str] = frozenset({"opening"})
 KEEP_CANONICAL_CLASSES: FrozenSet[str] = frozenset(CLASS_TO_IDX.keys())
 
 

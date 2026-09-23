@@ -18,10 +18,10 @@ struct DrowsinessFeatureSample: Equatable, Sendable {
     }
 }
 
-/// Exact feature contract from `feature_contract.py` / `FEATURE_SCHEMA_V2.md`.
+/// Exact feature contract from `feature_contract.py` (schema v3).
 enum DrowsinessFeatureContract {
     /// Must match Python `FEATURE_SCHEMA_VERSION`.
-    static let schemaVersion: String = "drowsiness_feature_schema_v2"
+    static let schemaVersion: String = "drowsiness_feature_schema_v3"
 
     static let featureNames: [String] = [
         "face_detected",
@@ -32,8 +32,6 @@ enum DrowsinessFeatureContract {
         "right_eye_valid",
         "left_eye_aspect_ratio",
         "right_eye_aspect_ratio",
-        "left_eyelid_gap_ratio",
-        "right_eyelid_gap_ratio",
         "left_pupil_rel_x",
         "left_pupil_rel_y",
         "right_pupil_rel_x",

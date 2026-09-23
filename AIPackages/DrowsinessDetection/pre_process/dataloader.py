@@ -22,14 +22,19 @@ from torch.utils.data import DataLoader, Dataset
 PathLike = Union[Path, str]
 
 ANNS_DIR = Path("/data/quantization/zaima/DMD/drowsiness/anns")
-# Prefer package-local schema-v2 CSVs (legacy Apple Vision dumps use a different suffix).
+# Prefer package-local schema-v3 CSVs (legacy Apple Vision dumps use a different suffix).
 _PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_V3_LANDMARKS = _PACKAGE_ROOT / "data" / "landmarks_v3"
 _DEFAULT_V2_LANDMARKS = _PACKAGE_ROOT / "data" / "landmarks_v2"
 _LEGACY_LANDMARKS = Path("/data/quantization/zaima/DMD/drowsiness/landmarks")
 LANDMARKS_DIR = (
-    _DEFAULT_V2_LANDMARKS
-    if _DEFAULT_V2_LANDMARKS.is_dir()
-    else _LEGACY_LANDMARKS
+    _DEFAULT_V3_LANDMARKS
+    if _DEFAULT_V3_LANDMARKS.is_dir()
+    else (
+        _DEFAULT_V2_LANDMARKS
+        if _DEFAULT_V2_LANDMARKS.is_dir()
+        else _LEGACY_LANDMARKS
+    )
 )
 
 ANN_SUFFIX = "_rgb_ann_drowsiness.json"
@@ -357,12 +362,12 @@ discover_gaze_zone_classes = discover_drowsiness_classes
 
 
 class DMDGazeFrameDataset(Dataset):
-    """In-memory frame-level DMD drowsiness dataset (schema v2 features).
+    """In-memory frame-level DMD drowsiness dataset (schema v3 features).
 
-    Stores every frame that has an explicit ``eyes_state/*`` annotation,
-    including excluded transition states (``opening`` / ``closing``) so they
-    can provide temporal context inside windows. Training endpoints are
-    filtered later by the window dataset.
+    Stores every frame that has an explicit ``eyes_state/*`` annotation.
+    ``closing`` is mapped to canonical ``closed`` and kept as a training
+    target. ``opening`` remains excluded as a window endpoint but can still
+    appear as temporal context inside kept windows.
     """
 
     def __init__(
@@ -396,11 +401,11 @@ class DMDGazeFrameDataset(Dataset):
             if legacy_glob and not list(self.landmarks_dir.glob(f"*{CSV_SUFFIX}")):
                 legacy_hint = (
                     f" Found {len(legacy_glob)} legacy "
-                    "'*_rgb_face.apple_drowsiness.csv' files but schema v2 requires "
+                    "'*_rgb_face.apple_drowsiness.csv' files but schema v3 requires "
                     f"'{CSV_SUFFIX}'. Convert with: "
-                    "python scripts/build_v2_csv_from_legacy.py "
+                    "python scripts/build_v3_csv_from_legacy.py "
                     f"--landmarks-dir {self.landmarks_dir} "
-                    "or pass --landmarks-dir data/landmarks_v2"
+                    "or pass --landmarks-dir data/landmarks_v3"
                 )
             raise FileNotFoundError(
                 "No matched ann/CSV sessions. "
@@ -414,7 +419,8 @@ class DMDGazeFrameDataset(Dataset):
         self.csv_only_session_keys = csv_only
         self.session_keys = list(matched_keys)
 
-        # Canonical 3-class contract (never discover opening/closing as classes).
+        # Canonical 3-class contract (never discover opening as a class;
+        # closing maps to closed).
         if class_to_idx is None:
             self.class_to_idx = dict(CLASS_TO_IDX)
         else:
@@ -540,7 +546,7 @@ class DMDGazeFrameDataset(Dataset):
             f"{self.feature_names}"
         )
         print(f"raw_label_counts: {self.raw_label_counts}")
-        print(f"excluded_raw_counts (opening/closing): {self.excluded_raw_counts}")
+        print(f"excluded_raw_counts (opening): {self.excluded_raw_counts}")
         print(f"canonical class_to_idx: {self.class_to_idx}")
         print(f"canonical class_counts (frame-level keep): {self.class_counts}")
         print(

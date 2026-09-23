@@ -1,5 +1,5 @@
 {
-  "schema_version": "drowsiness_feature_schema_v2",
+  "schema_version": "drowsiness_feature_schema_v3",
   "feature_names": [
     "face_detected",
     "yaw",
@@ -9,8 +9,6 @@
     "right_eye_valid",
     "left_eye_aspect_ratio",
     "right_eye_aspect_ratio",
-    "left_eyelid_gap_ratio",
-    "right_eyelid_gap_ratio",
     "left_pupil_rel_x",
     "left_pupil_rel_y",
     "right_pupil_rel_x",
@@ -23,8 +21,6 @@
     0.02,
     1.0,
     1.0,
-    0.7999999999999998,
-    0.7999999999999998,
     0.7999999999999998,
     0.7999999999999998,
     0.5,

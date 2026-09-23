@@ -46,8 +46,6 @@ def _valid_frame(
     roll: float = 0.02,
     left_ear: float = 0.25,
     right_ear: float = 0.27,
-    left_gap: float = 0.18,
-    right_gap: float = 0.19,
     left_px: float = 0.45,
     left_py: float = 0.52,
     right_px: float = 0.55,
@@ -62,8 +60,6 @@ def _valid_frame(
     row[INDEX["right_eye_valid"]] = 1.0
     row[INDEX["left_eye_aspect_ratio"]] = left_ear
     row[INDEX["right_eye_aspect_ratio"]] = right_ear
-    row[INDEX["left_eyelid_gap_ratio"]] = left_gap
-    row[INDEX["right_eyelid_gap_ratio"]] = right_gap
     row[INDEX["left_pupil_rel_x"]] = left_px
     row[INDEX["left_pupil_rel_y"]] = left_py
     row[INDEX["right_pupil_rel_x"]] = right_px
@@ -162,8 +158,8 @@ def test_raw_label_mapping_matches_observed_types() -> None:
     assert map_raw_eyes_state("close") == "closed"
     assert map_raw_eyes_state("open") == "open"
     assert map_raw_eyes_state("undefined") == "undefined"
+    assert map_raw_eyes_state("closing") == "closed"
     assert map_raw_eyes_state("opening") is None
-    assert map_raw_eyes_state("closing") is None
     with pytest.raises(KeyError):
         map_raw_eyes_state("opened")
     with pytest.raises(KeyError):
@@ -190,7 +186,7 @@ def test_augmenter_output_shape_masks_pupils_finite() -> None:
         seed=0,
     )
     out = aug(window)
-    assert out.shape == (T, 14)
+    assert out.shape == (T, 12)
     for name in ("face_detected", "left_eye_valid", "right_eye_valid"):
         vals = out[:, INDEX[name]]
         assert set(np.unique(vals)).issubset({0.0, 1.0})
@@ -220,9 +216,7 @@ def test_morphology_scale_constant_through_window() -> None:
     out = aug(window)
     for name in (
         "left_eye_aspect_ratio",
-        "left_eyelid_gap_ratio",
         "right_eye_aspect_ratio",
-        "right_eyelid_gap_ratio",
     ):
         col = out[:, INDEX[name]]
         assert np.allclose(col, col[0]), name
@@ -329,7 +323,6 @@ def test_invalid_eye_features_exactly_zero() -> None:
     out = aug(window)
     for name in (
         "left_eye_aspect_ratio",
-        "left_eyelid_gap_ratio",
         "left_pupil_rel_x",
         "left_pupil_rel_y",
     ):
@@ -348,7 +341,7 @@ def test_fixed_seed_deterministic_and_different_seeds_differ() -> None:
     assert not np.allclose(a1, b)
 
 
-def test_window_filter_drops_opening_closing_keeps_three_classes() -> None:
+def test_window_filter_drops_opening_keeps_closing_as_closed() -> None:
     buf = io.StringIO()
     with redirect_stdout(buf):
         ds = DrowsinessWindowDataset(
@@ -360,7 +353,8 @@ def test_window_filter_drops_opening_closing_keeps_three_classes() -> None:
     text = buf.getvalue()
     assert "endpoint counts BEFORE filter" in text
     assert "endpoint counts AFTER filter" in text
-    assert "opening" in ds.removed_transition_windows or "closing" in ds.removed_transition_windows
+    assert "opening" in ds.removed_transition_windows
+    assert "closing" not in ds.removed_transition_windows
     removed = sum(ds.removed_transition_windows.values())
     assert removed > 0
     labels = {s["label_name"] for s in ds.samples}
@@ -368,8 +362,15 @@ def test_window_filter_drops_opening_closing_keeps_three_classes() -> None:
     assert "opening" not in labels and "closing" not in labels
     indices = {s["label_index"] for s in ds.samples}
     assert indices.issubset({0, 1, 2})
+    # Closing endpoints are retained with canonical closed label.
+    closing_kept = [
+        s for s in ds.samples if s["raw_label_name"] == "closing"
+    ]
+    assert len(closing_kept) > 0
+    assert all(s["label_name"] == "closed" for s in closing_kept)
+    assert all(s["label_index"] == CLASS_TO_IDX["closed"] for s in closing_kept)
     for s in ds.samples:
-        assert s["raw_label_name"] not in ("opening", "closing")
+        assert s["raw_label_name"] != "opening"
 
 
 def test_windows_never_cross_sessions_or_discontinuities() -> None:
@@ -383,7 +384,7 @@ def test_windows_never_cross_sessions_or_discontinuities() -> None:
         session = meta["session_key"]
         local = meta["local_index"]
         feats, label = ds[i]
-        assert feats.shape == (WINDOW, 14)
+        assert feats.shape == (WINDOW, 12)
         assert int(label.item()) in (0, 1, 2)
         frame_ids = ds._session_frame_ids[session]
         start = local - WINDOW + 1
@@ -499,7 +500,7 @@ def test_checkpoint_metadata_fields_present_in_builder_info() -> None:
         verbose=False,
     )
     payload = {
-        "feature_schema_version": "drowsiness_feature_schema_v2",
+        "feature_schema_version": "drowsiness_feature_schema_v3",
         "feature_names": list(DROWSINESS_FEATURE_NAMES),
         **standardizer.to_checkpoint_dict(),
         "class_to_idx": dict(CLASS_TO_IDX),

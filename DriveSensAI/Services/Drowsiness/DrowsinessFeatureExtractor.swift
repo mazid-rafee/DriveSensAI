@@ -6,17 +6,17 @@
 import Foundation
 import Vision
 
-/// Builds schema-v2 training-compatible feature rows from Apple Vision face landmarks.
+/// Builds schema-v3 training-compatible feature rows from Apple Vision face landmarks.
 ///
 /// Formulas must stay identical to Python `feature_math.py`
-/// (`drowsiness_feature_schema_v2`).
+/// (`drowsiness_feature_schema_v3`). Eyelid-gap ratios are not part of the model input.
 enum DrowsinessFeatureExtractor {
     static func makeSample(
         faces: [VNFaceObservation],
         hands: [VNHumanHandPoseObservation] = [],
         timestamp: Date = Date()
     ) -> DrowsinessFeatureSample {
-        // Hands are ignored in v2 model input; parameter retained for call-site stability.
+        // Hands are ignored in v3 model input; parameter retained for call-site stability.
         _ = hands
         let timestampMs = Int64((timestamp.timeIntervalSince1970 * 1000.0).rounded())
         var values = Array(repeating: 0.0, count: DrowsinessFeatureContract.featureCount)
@@ -45,9 +45,8 @@ enum DrowsinessFeatureExtractor {
         )
         values[4] = left.valid
         values[6] = left.aspectRatio
-        values[8] = left.eyelidGapRatio
-        values[10] = left.pupilRelX
-        values[11] = left.pupilRelY
+        values[8] = left.pupilRelX
+        values[9] = left.pupilRelY
 
         let right = eyeLocalFeatures(
             region: landmarks?.rightEye,
@@ -56,9 +55,8 @@ enum DrowsinessFeatureExtractor {
         )
         values[5] = right.valid
         values[7] = right.aspectRatio
-        values[9] = right.eyelidGapRatio
-        values[12] = right.pupilRelX
-        values[13] = right.pupilRelY
+        values[10] = right.pupilRelX
+        values[11] = right.pupilRelY
 
         for index in values.indices where !values[index].isFinite {
             values[index] = 0.0
@@ -92,12 +90,10 @@ enum DrowsinessFeatureExtractor {
         values[5] = right.valid
         values[6] = left.aspectRatio
         values[7] = right.aspectRatio
-        values[8] = left.eyelidGapRatio
-        values[9] = right.eyelidGapRatio
-        values[10] = left.pupilRelX
-        values[11] = left.pupilRelY
-        values[12] = right.pupilRelX
-        values[13] = right.pupilRelY
+        values[8] = left.pupilRelX
+        values[9] = left.pupilRelY
+        values[10] = right.pupilRelX
+        values[11] = right.pupilRelY
         for index in values.indices where !values[index].isFinite {
             values[index] = 0.0
         }
@@ -109,14 +105,12 @@ enum DrowsinessFeatureExtractor {
     private struct EyeLocalFeatures {
         var valid: Double
         var aspectRatio: Double
-        var eyelidGapRatio: Double
         var pupilRelX: Double
         var pupilRelY: Double
 
         static let invalid = EyeLocalFeatures(
             valid: 0,
             aspectRatio: 0,
-            eyelidGapRatio: 0,
             pupilRelX: 0,
             pupilRelY: 0
         )
@@ -162,16 +156,7 @@ enum DrowsinessFeatureExtractor {
         }
 
         let ear = height / max(width, eps)
-
-        guard let upper = points.max(by: { $0.y < $1.y }),
-              let lower = points.min(by: { $0.y < $1.y }) else {
-            return .invalid
-        }
-        let dx = Double(upper.x - lower.x)
-        let dy = Double(upper.y - lower.y)
-        let gap = (dx * dx + dy * dy).squareRoot()
-        let gapRatio = gap / max(width, eps)
-        guard ear.isFinite, gapRatio.isFinite else {
+        guard ear.isFinite else {
             return .invalid
         }
 
@@ -189,7 +174,6 @@ enum DrowsinessFeatureExtractor {
         return EyeLocalFeatures(
             valid: 1.0,
             aspectRatio: ear,
-            eyelidGapRatio: gapRatio,
             pupilRelX: relX,
             pupilRelY: relY
         )

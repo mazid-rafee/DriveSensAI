@@ -2,8 +2,9 @@
 """Drowsiness window dataloader: session split, filtering, aug, standardization.
 
 Window target rule (preserved): **last frame** of a causal window of length T.
-``opening`` / ``closing`` endpoints are dropped; those frames may still appear
-as temporal context inside kept windows.
+``opening`` endpoints are dropped; ``closing`` endpoints are kept and labeled
+``closed``. Dropped transition frames may still appear as temporal context
+inside kept windows.
 """
 
 from __future__ import annotations
@@ -47,19 +48,13 @@ DEFAULT_SAMPLING_RATE_HZ = 15.0
 
 BINARY_FEATURE_NAMES = ("face_detected", "left_eye_valid", "right_eye_valid")
 POSE_FEATURE_NAMES = ("yaw", "pitch", "roll")
+# Kept in the frozen schema but forced to 0.0 for all train/val model inputs.
+FORCED_ZERO_FEATURE_NAMES = ("pitch",)
 # Candidate morphology names; only those present in the frozen schema are used.
-LEFT_MORPHOLOGY_CANDIDATES = (
-    "left_eye_aspect_ratio",
-    "left_eyelid_gap",
-    "left_eyelid_gap_ratio",
-)
-RIGHT_MORPHOLOGY_CANDIDATES = (
-    "right_eye_aspect_ratio",
-    "right_eyelid_gap",
-    "right_eyelid_gap_ratio",
-)
-LEFT_RATIO_NAMES = ("left_eye_aspect_ratio", "left_eyelid_gap_ratio")
-RIGHT_RATIO_NAMES = ("right_eye_aspect_ratio", "right_eyelid_gap_ratio")
+LEFT_MORPHOLOGY_CANDIDATES = ("left_eye_aspect_ratio",)
+RIGHT_MORPHOLOGY_CANDIDATES = ("right_eye_aspect_ratio",)
+LEFT_RATIO_NAMES = ("left_eye_aspect_ratio",)
+RIGHT_RATIO_NAMES = ("right_eye_aspect_ratio",)
 LEFT_PUPIL_CANDIDATES = ("left_pupil_rel_x", "left_pupil_rel_y", "left_pupil_x", "left_pupil_y")
 RIGHT_PUPIL_CANDIDATES = (
     "right_pupil_rel_x",
@@ -81,6 +76,22 @@ def feature_index_map(
     feature_names: Sequence[str] = DROWSINESS_FEATURE_NAMES,
 ) -> Dict[str, int]:
     return {name: idx for idx, name in enumerate(feature_names)}
+
+
+def apply_forced_zero_features(
+    frames: np.ndarray,
+    feature_names: Sequence[str] = DROWSINESS_FEATURE_NAMES,
+) -> np.ndarray:
+    """Zero schema-retained features that are disabled for training (e.g. pitch).
+
+    Does not remove or reorder columns — only overwrites values in-place on a copy.
+    """
+    out = np.array(frames, dtype=np.float64, copy=True)
+    index = feature_index_map(feature_names)
+    for name in FORCED_ZERO_FEATURE_NAMES:
+        if name in index:
+            out[..., index[name]] = 0.0
+    return out
 
 
 def _present(names: Sequence[str], feature_set: set[str]) -> Tuple[str, ...]:
@@ -210,7 +221,11 @@ class ClosedWindowAugmenter:
 
         self.left_morphology = _present(LEFT_MORPHOLOGY_CANDIDATES, self.feature_set)
         self.right_morphology = _present(RIGHT_MORPHOLOGY_CANDIDATES, self.feature_set)
-        self.pose_names = _present(POSE_FEATURE_NAMES, self.feature_set)
+        self.pose_names = tuple(
+            name
+            for name in _present(POSE_FEATURE_NAMES, self.feature_set)
+            if name not in FORCED_ZERO_FEATURE_NAMES
+        )
         self.left_pupil = _present(LEFT_PUPIL_CANDIDATES, self.feature_set)
         self.right_pupil = _present(RIGHT_PUPIL_CANDIDATES, self.feature_set)
         self.left_eye_continuous = _present(
@@ -260,6 +275,7 @@ class ClosedWindowAugmenter:
 
         out = self._clamp_to_bounds(out)
         out = enforce_feature_invariants(out, self.index, self.feature_names)
+        out = apply_forced_zero_features(out, self.feature_names)
         if self.debug and original is not None:
             self._print_debug(original, out)
         return out.astype(np.float32, copy=False)
@@ -348,11 +364,9 @@ class ClosedWindowAugmenter:
             bias = self._rng.normal(0.0, cfg.bias_std_fraction * self._std(name))
             window[:, self.index[name]] += bias * face.astype(np.float64)
 
-        # Morphology pairs: aspect ratio / eyelid gap / gap_ratio.
+        # Morphology pairs: aspect ratio only in schema v3.
         for left_name, right_name in (
             ("left_eye_aspect_ratio", "right_eye_aspect_ratio"),
-            ("left_eyelid_gap", "right_eyelid_gap"),
-            ("left_eyelid_gap_ratio", "right_eyelid_gap_ratio"),
         ):
             if left_name not in self.index and right_name not in self.index:
                 continue
@@ -564,9 +578,11 @@ class FeatureStandardizer:
         mask = np.zeros(len(feature_names), dtype=np.bool_)
 
         binary = set(BINARY_FEATURE_NAMES)
+        forced_zero = set(FORCED_ZERO_FEATURE_NAMES)
         for name in feature_names:
             col = index[name]
-            if name in binary:
+            if name in binary or name in forced_zero:
+                # Binaries stay {0,1}; forced-zero channels remain exactly 0.
                 continue
             mask[col] = True
             if name in LEFT_EYE_CONTINUOUS:
@@ -594,6 +610,7 @@ class FeatureStandardizer:
         out = enforce_feature_invariants(
             out, feature_index_map(self.feature_names), self.feature_names
         )
+        out = apply_forced_zero_features(out, self.feature_names)
         return out.astype(np.float32, copy=False)
 
     def to_checkpoint_dict(self) -> Dict[str, Any]:
@@ -676,6 +693,9 @@ class DrowsinessWindowDataset(Dataset):
                 [frame_dataset.samples[i]["features"].numpy() for i in indices],
                 axis=0,
             ).astype(np.float32)
+            feats = apply_forced_zero_features(feats, self.feature_names).astype(
+                np.float32, copy=False
+            )
             frame_ids = np.asarray(
                 [frame_dataset.samples[i]["frame_index"] for i in indices],
                 dtype=np.int64,
@@ -762,7 +782,7 @@ class DrowsinessWindowDataset(Dataset):
         print(f"window_size: {self.window_size}")
         print(f"endpoint counts BEFORE filter (raw): {self.counts_before_filter}")
         print(
-            f"opening/closing endpoints removed: {self.removed_transition_windows}"
+            f"opening endpoints removed: {self.removed_transition_windows}"
         )
         print(
             f"endpoint counts AFTER filter (canonical): {self.counts_after_filter}"
@@ -803,12 +823,17 @@ class DrowsinessWindowDataset(Dataset):
         if self.augment and self._should_augment(meta):
             assert self.augmenter is not None
             window = self.augmenter(window)
+        else:
+            window = apply_forced_zero_features(window, self.feature_names)
         if self.standardizer is not None:
             window = self.standardizer.transform(window)
         else:
             window = enforce_feature_invariants(
                 window, feature_index_map(self.feature_names), self.feature_names
             ).astype(np.float32)
+            window = apply_forced_zero_features(window, self.feature_names).astype(
+                np.float32, copy=False
+            )
 
         if not np.isfinite(window).all():
             raise ValueError(
@@ -960,6 +985,10 @@ def build_train_val_window_datasets(
         [frame_dataset.samples[i]["features"].numpy() for i in train_frame_indices],
         axis=0,
     ).astype(np.float32)
+    # Pitch remains in the schema but is zeroed for all train/val model inputs.
+    train_frames = apply_forced_zero_features(
+        train_frames, frame_dataset.feature_names
+    ).astype(np.float32, copy=False)
     # Normalization stats from original unaugmented training frames only.
     standardizer = FeatureStandardizer.fit(train_frames, frame_dataset.feature_names)
     std_by_name = {
@@ -1040,6 +1069,7 @@ def build_train_val_window_datasets(
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_names": list(DROWSINESS_FEATURE_NAMES),
         "feature_count": FEATURE_COUNT,
+        "forced_zero_features": list(FORCED_ZERO_FEATURE_NAMES),
     }
     if verbose:
         print("=== train/val window split ===")
@@ -1238,6 +1268,8 @@ __all__ = [
     "compute_closed_oversample_targets",
     "compute_sample_weights",
     "fit_feature_bounds",
+    "apply_forced_zero_features",
+    "FORCED_ZERO_FEATURE_NAMES",
     "seed_everything",
     "enforce_feature_invariants",
     "feature_index_map",

@@ -411,19 +411,19 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         "--checkpoint-dir",
         type=Path,
         default=DEFAULT_CHECKPOINT_DIR,
-        help="Directory for v2 checkpoints (best_accuracy_v2.pt / best_loss_v2.pt).",
+        help="Directory for v3 checkpoints (best_accuracy_v3.pt / best_loss_v3.pt).",
     )
     parser.add_argument(
         "--best-accuracy-name",
         type=str,
-        default="best_accuracy_v2.pt",
-        help="Filename for the best-accuracy checkpoint (never overwrites v1).",
+        default="best_accuracy_v3.pt",
+        help="Filename for the best-accuracy checkpoint (never overwrites v1/v2).",
     )
     parser.add_argument(
         "--best-loss-name",
         type=str,
-        default="best_loss_v2.pt",
-        help="Filename for the best-loss checkpoint (never overwrites v1).",
+        default="best_loss_v3.pt",
+        help="Filename for the best-loss checkpoint (never overwrites v1/v2).",
     )
     parser.add_argument(
         "--gpu",
@@ -723,12 +723,12 @@ def main(argv: Optional[list] = None) -> int:
         if path.name in {"best_loss.pt", "best_accuracy.pt"}:
             raise ValueError(
                 f"refusing to overwrite legacy checkpoint name {path.name}; "
-                "use *_v2.pt"
+                "use *_v3.pt"
             )
     curve_path = (
         args.curve_path.expanduser().resolve()
         if args.curve_path is not None
-        else checkpoint_dir / "val_loss_accuracy_curves_v2.png"
+        else checkpoint_dir / "val_loss_accuracy_curves_v3.png"
     )
 
     def _checkpoint_kwargs(metrics: Dict[str, float]) -> Dict[str, object]:
@@ -916,11 +916,11 @@ def main(argv: Optional[list] = None) -> int:
             "sampling_config": sampling_config,
             "augmentation_config": augmentation_config,
         }
-        report_path = checkpoint_dir / "best_accuracy_v2_metrics.json"
+        report_path = checkpoint_dir / "best_accuracy_v3_metrics.json"
         report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(f"wrote metrics report: {report_path}")
 
-    history_path = checkpoint_dir / "train_history_v2.json"
+    history_path = checkpoint_dir / "train_history_v3.json"
     history_path.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
     print(f"wrote history: {history_path}")
     plot_val_curves(history, curve_path)
@@ -929,8 +929,8 @@ def main(argv: Optional[list] = None) -> int:
         f"best val accuracy={best_val_accuracy:.6f} | "
         f"best val macro_f1={best_val_macro_f1:.6f}"
     )
-    print(f"v2 accuracy checkpoint: {best_acc_path}")
-    print(f"v2 loss checkpoint:     {best_loss_path}")
+    print(f"v3 accuracy checkpoint: {best_acc_path}")
+    print(f"v3 loss checkpoint:     {best_loss_path}")
     return 0
 
 

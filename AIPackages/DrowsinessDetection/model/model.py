@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 
-DEFAULT_INPUT_DIM = 14
+DEFAULT_INPUT_DIM = 12
 DEFAULT_TCN_CHANNELS = 64
 DEFAULT_TCN_KERNEL_SIZE = 3
 DEFAULT_TCN_DILATIONS = (1, 2, 4)
@@ -209,7 +209,7 @@ def main() -> None:
     batch_size = 8
     window_size = 20
     num_classes = NUM_CLASSES
-    input_dim = 14
+    input_dim = DEFAULT_INPUT_DIM
     device = resolve_device(DEFAULT_GPU_ID, require_cuda=False)
     configure_cuda(device)
 

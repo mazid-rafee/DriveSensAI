@@ -1,5 +1,5 @@
 {
-  "schema_version": "drowsiness_feature_schema_v2",
+  "schema_version": "drowsiness_feature_schema_v3",
   "yaw": 0.12,
   "pitch": -0.05,
   "roll": 0.02,

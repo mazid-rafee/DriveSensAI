@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Authoritative drowsiness feature schema (v2).
+"""Authoritative drowsiness feature schema (v3).
 
 Import ``DROWSINESS_FEATURE_NAMES`` / ``FEATURE_SCHEMA_VERSION`` from this module
 everywhere. Do not copy the feature list by hand into other Python files.
+
+v3 drops eyelid-gap-ratio channels and keeps pupil-relative coordinates.
 """
 
 from __future__ import annotations
@@ -10,10 +12,12 @@ from __future__ import annotations
 from typing import List, Sequence
 
 # Explicit schema id shared with the iOS client and the inference API.
-FEATURE_SCHEMA_VERSION = "drowsiness_feature_schema_v2"
+FEATURE_SCHEMA_VERSION = "drowsiness_feature_schema_v3"
 
-# Reject legacy clients / checkpoints that still advertise schema 1.
-LEGACY_SCHEMA_VERSIONS: frozenset[str | int] = frozenset({1, "1", "v1", "schema_v1"})
+# Reject legacy clients / checkpoints that still advertise older schemas.
+LEGACY_SCHEMA_VERSIONS: frozenset[str | int] = frozenset(
+    {1, "1", "v1", "schema_v1", "drowsiness_feature_schema_v2"}
+)
 
 EPS: float = 1e-6
 
@@ -29,8 +33,6 @@ DROWSINESS_FEATURE_NAMES: List[str] = [
     "right_eye_valid",
     "left_eye_aspect_ratio",
     "right_eye_aspect_ratio",
-    "left_eyelid_gap_ratio",
-    "right_eyelid_gap_ratio",
     "left_pupil_rel_x",
     "left_pupil_rel_y",
     "right_pupil_rel_x",
@@ -50,20 +52,14 @@ _BINARY_FEATURE_NAMES = frozenset(
     }
 )
 
-# Landmark CSV suffix for v2 extractions (do not overwrite v1 files).
-CSV_SUFFIX = "_rgb_face.apple_drowsiness_v2.csv"
-CSV_META_SUFFIX = "_rgb_face.apple_drowsiness_v2.meta.json"
+# Landmark CSV suffix for v3 extractions (do not overwrite v1/v2 files).
+CSV_SUFFIX = "_rgb_face.apple_drowsiness_v3.csv"
+CSV_META_SUFFIX = "_rgb_face.apple_drowsiness_v3.meta.json"
 
 # Bounding-box EAR (unchanged convention from the previous extractor / iOS app).
 EAR_DEFINITION = (
     "bounding_box_aspect_ratio: "
     "(eye_max_y - eye_min_y) / max(eye_max_x - eye_min_x, eps)"
-)
-
-EYELID_GAP_DEFINITION = (
-    "euclidean_distance(upper_eyelid_point, lower_eyelid_point) / "
-    "max(eye_width, eps); upper=argmax_y, lower=argmin_y among eye points "
-    "(Vision image coords, origin bottom-left)"
 )
 
 PUPIL_REL_DEFINITION = (
@@ -72,4 +68,4 @@ PUPIL_REL_DEFINITION = (
     "clamped to [0, 1] when valid"
 )
 
-assert FEATURE_COUNT == 14, FEATURE_COUNT
+assert FEATURE_COUNT == 12, FEATURE_COUNT

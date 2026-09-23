@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Pure eye-local feature math for drowsiness schema v2.
+"""Pure eye-local feature math for drowsiness schema v3.
 
 Intentionally free of Apple frameworks so tests run on Linux CI. Formulas must
 stay bit-compatible with ``DrowsinessFeatureExtractor.swift``.
+
+v3 keeps EAR + pupil-relative coordinates and drops eyelid-gap-ratio channels.
 """
 
 from __future__ import annotations
@@ -41,21 +43,6 @@ def eye_bounds(
     return min(xs), max(xs), min(ys), max(ys)
 
 
-def eyelid_endpoints(
-    eye_points: PointList,
-) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
-    """Upper (max y) and lower (min y) eyelid points in Vision image coords."""
-    if len(eye_points) < MIN_EYE_LANDMARK_POINTS or not points_are_finite(eye_points):
-        return None
-    upper = max(eye_points, key=lambda p: float(p[1]))
-    lower = min(eye_points, key=lambda p: float(p[1]))
-    return (float(upper[0]), float(upper[1])), (float(lower[0]), float(lower[1]))
-
-
-def euclidean_distance(a: Point, b: Point) -> float:
-    return math.hypot(float(a[0]) - float(b[0]), float(a[1]) - float(b[1]))
-
-
 def bounding_box_ear(
     eye_min_x: float,
     eye_max_x: float,
@@ -70,20 +57,6 @@ def bounding_box_ear(
     if not all(math.isfinite(v) for v in (width, height)):
         return float("nan")
     return height / width
-
-
-def eyelid_gap_ratio(
-    eye_points: PointList,
-    eye_width: float,
-) -> float:
-    endpoints = eyelid_endpoints(eye_points)
-    if endpoints is None:
-        return float("nan")
-    upper, lower = endpoints
-    gap = euclidean_distance(upper, lower)
-    if not math.isfinite(gap):
-        return float("nan")
-    return gap / max(eye_width, EPS)
 
 
 def pupil_relative(
@@ -116,11 +89,10 @@ def compute_one_eye(
     eye_points: Optional[PointList],
     pupil_point: Optional[Point],
 ) -> Dict[str, float]:
-    """Return eye_valid, EAR, gap_ratio, pupil_rel_x/y for one eye."""
+    """Return eye_valid, EAR, and pupil_rel_x/y for one eye."""
     invalid = {
         "eye_valid": 0.0,
         "eye_aspect_ratio": 0.0,
-        "eyelid_gap_ratio": 0.0,
         "pupil_rel_x": 0.0,
         "pupil_rel_y": 0.0,
     }
@@ -136,8 +108,7 @@ def compute_one_eye(
         return invalid
 
     ear = bounding_box_ear(eye_min_x, eye_max_x, eye_min_y, eye_max_y)
-    gap_ratio = eyelid_gap_ratio(eye_points, eye_width)
-    if not math.isfinite(ear) or not math.isfinite(gap_ratio):
+    if not math.isfinite(ear):
         return invalid
 
     if pupil_point is None or len(pupil_point) < 2:
@@ -153,7 +124,6 @@ def compute_one_eye(
     return {
         "eye_valid": 1.0,
         "eye_aspect_ratio": float(ear),
-        "eyelid_gap_ratio": float(gap_ratio),
         "pupil_rel_x": float(rel_x),
         "pupil_rel_y": float(rel_y),
     }
@@ -175,7 +145,7 @@ def build_feature_row(
     right_eye_points: Optional[PointList] = None,
     right_pupil: Optional[Point] = None,
 ) -> List[float]:
-    """Assemble the canonical 14-D model input vector."""
+    """Assemble the canonical 12-D model input vector."""
     if not face_detected:
         return empty_feature_row()
 
@@ -191,8 +161,6 @@ def build_feature_row(
         "right_eye_valid": right["eye_valid"],
         "left_eye_aspect_ratio": left["eye_aspect_ratio"],
         "right_eye_aspect_ratio": right["eye_aspect_ratio"],
-        "left_eyelid_gap_ratio": left["eyelid_gap_ratio"],
-        "right_eyelid_gap_ratio": right["eyelid_gap_ratio"],
         "left_pupil_rel_x": left["pupil_rel_x"],
         "left_pupil_rel_y": left["pupil_rel_y"],
         "right_pupil_rel_x": right["pupil_rel_x"],

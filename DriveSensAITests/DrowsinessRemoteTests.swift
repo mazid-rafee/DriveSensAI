@@ -9,10 +9,10 @@ import XCTest
 final class DrowsinessRemoteTests: XCTestCase {
 
     func testFeatureOrderMatchesPythonContract() {
-        XCTAssertEqual(DrowsinessFeatureContract.featureCount, 14)
+        XCTAssertEqual(DrowsinessFeatureContract.featureCount, 12)
         XCTAssertEqual(
             DrowsinessFeatureContract.schemaVersion,
-            "drowsiness_feature_schema_v2"
+            "drowsiness_feature_schema_v3"
         )
         XCTAssertEqual(DrowsinessFeatureContract.windowFrames, 20)
         XCTAssertEqual(DrowsinessFeatureContract.samplingRateHz, 15.0)
@@ -31,8 +31,6 @@ final class DrowsinessRemoteTests: XCTestCase {
                 "right_eye_valid",
                 "left_eye_aspect_ratio",
                 "right_eye_aspect_ratio",
-                "left_eyelid_gap_ratio",
-                "right_eyelid_gap_ratio",
                 "left_pupil_rel_x",
                 "left_pupil_rel_y",
                 "right_pupil_rel_x",
@@ -52,7 +50,7 @@ final class DrowsinessRemoteTests: XCTestCase {
             samples: [
                 DrowsinessAPISample(
                     timestampMs: 1,
-                    values: Array(repeating: 0.0, count: 14)
+                    values: Array(repeating: 0.0, count: 12)
                 ),
             ]
         )
@@ -64,7 +62,7 @@ final class DrowsinessRemoteTests: XCTestCase {
         )
         XCTAssertEqual(
             json["feature_schema_version"] as? String,
-            "drowsiness_feature_schema_v2"
+            "drowsiness_feature_schema_v3"
         )
         XCTAssertEqual(json["session_id"] as? String, "s1")
         XCTAssertEqual(json["sequence_id"] as? Int, 42)
@@ -89,8 +87,8 @@ final class DrowsinessRemoteTests: XCTestCase {
             "open": 0.91,
             "undefined": 0.04
           },
-          "model_version": "best_accuracy_v2",
-          "feature_schema_version": "drowsiness_feature_schema_v2",
+          "model_version": "best_accuracy_v3",
+          "feature_schema_version": "drowsiness_feature_schema_v3",
           "inference_latency_ms": 8.4
         }
         """.data(using: .utf8)!
@@ -98,13 +96,13 @@ final class DrowsinessRemoteTests: XCTestCase {
         XCTAssertEqual(decoded.label, "open")
         XCTAssertEqual(decoded.labelIndex, 1)
         XCTAssertEqual(decoded.probabilities.count, 3)
-        XCTAssertEqual(decoded.featureSchemaVersion, "drowsiness_feature_schema_v2")
+        XCTAssertEqual(decoded.featureSchemaVersion, "drowsiness_feature_schema_v3")
         XCTAssertTrue(decoded.confidence.isFinite)
     }
 
     func testMaskedSampleWhenNoFace() {
         let sample = DrowsinessFeatureExtractor.makeSample(faces: [], hands: [])
-        XCTAssertEqual(sample.values.count, 14)
+        XCTAssertEqual(sample.values.count, 12)
         XCTAssertTrue(sample.isFinite)
         XCTAssertEqual(sample.values[0], 0.0) // face_detected
         XCTAssertTrue(sample.values.allSatisfy { $0 == 0.0 })
@@ -151,14 +149,12 @@ final class DrowsinessRemoteTests: XCTestCase {
             1.0,
             0.8,
             0.8,
-            0.8,
-            0.8,
             0.5,
             0.5,
             0.5,
             0.5,
         ]
-        XCTAssertEqual(values.count, 14)
+        XCTAssertEqual(values.count, 12)
         for (got, want) in zip(values, expected) {
             XCTAssertEqual(got, want, accuracy: 1e-5)
         }
@@ -209,7 +205,7 @@ final class DrowsinessRemoteTests: XCTestCase {
             rightEyePoints: shiftedRight,
             rightPupil: CGPoint(x: 0.60 + dx, y: 0.55 + dy)
         )
-        for index in 4..<14 {
+        for index in 4..<12 {
             XCTAssertEqual(shifted[index], base[index], accuracy: 1e-5)
         }
     }
@@ -220,7 +216,7 @@ final class DrowsinessRemoteTests: XCTestCase {
         defer { coordinator.stop() }
 
         for index in 0..<40 {
-            let values = Array(repeating: Double(index), count: 14)
+            let values = Array(repeating: Double(index), count: 12)
             let sample = DrowsinessFeatureSample(
                 timestampMs: Int64(index),
                 values: values

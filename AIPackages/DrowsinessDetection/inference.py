@@ -50,20 +50,20 @@ from device import (  # noqa: E402
 )
 from model.model import GazeZoneTCN, build_model  # noqa: E402
 
-DEFAULT_CHECKPOINT = _SRC_DIR / "saved_weights" / "best_accuracy_v2.pt"
+DEFAULT_CHECKPOINT = _SRC_DIR / "saved_weights" / "best_accuracy_v3.pt"
 
 
 class SchemaContractError(ValueError):
-    """Raised when a checkpoint or feature packet violates schema v2."""
+    """Raised when a checkpoint or feature packet violates schema v3."""
 
 
-def _require_v2_checkpoint(checkpoint: Dict[str, Any]) -> None:
+def _require_v3_checkpoint(checkpoint: Dict[str, Any]) -> None:
     schema = checkpoint.get("feature_schema_version") or checkpoint.get(
         "schema_version"
     )
     if schema is None:
         raise SchemaContractError(
-            "checkpoint missing feature_schema_version; rejecting as non-v2"
+            "checkpoint missing feature_schema_version; rejecting as non-v3"
         )
     if schema in LEGACY_SCHEMA_VERSIONS or str(schema) != FEATURE_SCHEMA_VERSION:
         raise SchemaContractError(
@@ -97,7 +97,7 @@ def load_checkpoint(
     checkpoint_path: Path,
     device: torch.device,
 ) -> Tuple[GazeZoneTCN, Dict[str, Any], int]:
-    """Load a v2 checkpoint and return ``(model, ckpt, window)``.
+    """Load a v3 checkpoint and return ``(model, ckpt, window)``.
 
     Uses ``load_state_dict(..., strict=True)``. Model is moved to ``device`` and
     set to ``eval()``.
@@ -112,7 +112,7 @@ def load_checkpoint(
     if "class_to_idx" not in checkpoint:
         raise KeyError("checkpoint missing required key 'class_to_idx'")
 
-    _require_v2_checkpoint(checkpoint)
+    _require_v3_checkpoint(checkpoint)
 
     feature_names: List[str] = list(checkpoint["feature_names"])
     class_to_idx: Dict[str, int] = dict(checkpoint["class_to_idx"])

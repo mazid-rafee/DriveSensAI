@@ -10,12 +10,12 @@ import torch
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_CHECKPOINT_RELATIVE = "saved_weights/best_accuracy_v2.pt"
+DEFAULT_CHECKPOINT_RELATIVE = "saved_weights/best_accuracy_v3.pt"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8001
 DEFAULT_DEVICE = "auto"
 
-# Sampling rate is stored in v2 checkpoints. When DROWSINESS_SAMPLING_RATE_HZ is
+# Sampling rate is stored in v3 checkpoints. When DROWSINESS_SAMPLING_RATE_HZ is
 # set, the API enforces an exact match. When unset, the checkpoint value (or 15)
 # is used.
 ENV_SAMPLING_RATE = "DROWSINESS_SAMPLING_RATE_HZ"

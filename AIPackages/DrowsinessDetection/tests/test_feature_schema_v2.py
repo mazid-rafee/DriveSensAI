@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for drowsiness feature schema v2 (eye-local normalization)."""
+"""Unit tests for drowsiness feature schema v3 (eye-local normalization)."""
 
 from __future__ import annotations
 
@@ -47,10 +47,10 @@ def _fixture_row() -> list[float]:
     )
 
 
-def test_feature_count_is_14() -> None:
-    assert FEATURE_COUNT == 14
-    assert len(DROWSINESS_FEATURE_NAMES) == 14
-    assert len(_fixture_row()) == 14
+def test_feature_count_is_12() -> None:
+    assert FEATURE_COUNT == 12
+    assert len(DROWSINESS_FEATURE_NAMES) == 12
+    assert len(_fixture_row()) == 12
 
 
 def test_feature_order_matches_canonical_list() -> None:
@@ -63,14 +63,12 @@ def test_feature_order_matches_canonical_list() -> None:
         "right_eye_valid",
         "left_eye_aspect_ratio",
         "right_eye_aspect_ratio",
-        "left_eyelid_gap_ratio",
-        "right_eyelid_gap_ratio",
         "left_pupil_rel_x",
         "left_pupil_rel_y",
         "right_pupil_rel_x",
         "right_pupil_rel_y",
     ]
-    assert FEATURE_SCHEMA_VERSION == "drowsiness_feature_schema_v2"
+    assert FEATURE_SCHEMA_VERSION == "drowsiness_feature_schema_v3"
 
 
 def test_translation_invariance_of_normalized_eye_features() -> None:
@@ -88,7 +86,7 @@ def test_translation_invariance_of_normalized_eye_features() -> None:
         right_pupil=(fixture["right_pupil"][0] + dx, fixture["right_pupil"][1] + dy),
     )
     # Pose channels unchanged; normalized eye channels must match.
-    for index in range(4, 14):
+    for index in range(4, 12):
         assert shifted[index] == pytest.approx(base[index], abs=1e-5)
 
 
@@ -120,8 +118,6 @@ def test_uniform_scale_invariance_of_normalized_eye_features() -> None:
     for name in (
         "left_eye_aspect_ratio",
         "right_eye_aspect_ratio",
-        "left_eyelid_gap_ratio",
-        "right_eyelid_gap_ratio",
         "left_pupil_rel_x",
         "left_pupil_rel_y",
         "right_pupil_rel_x",
@@ -157,14 +153,14 @@ def test_invalid_eye_zeros_features() -> None:
     assert row[0] == 1.0
     assert row[4] == 0.0  # left_eye_valid
     assert row[5] == 0.0  # right_eye_valid
-    assert row[6:14] == [0.0] * 8
+    assert row[6:12] == [0.0] * 6
 
 
 def test_missing_face_produces_all_zero_row() -> None:
     row = empty_feature_row()
-    assert row == [0.0] * 14
+    assert row == [0.0] * 12
     row2 = build_feature_row(face_detected=False, yaw=9.0, pitch=9.0, roll=9.0)
-    assert row2 == [0.0] * 14
+    assert row2 == [0.0] * 12
 
 
 def test_no_nan_or_inf_in_outputs() -> None:
@@ -206,4 +202,4 @@ def test_every_frame_emits_one_row_even_when_invalid() -> None:
         build_feature_row(face_detected=True, left_eye_points=None, right_eye_points=None),
         _fixture_row(),
     ]
-    assert all(len(row) == 14 for row in rows)
+    assert all(len(row) == 12 for row in rows)

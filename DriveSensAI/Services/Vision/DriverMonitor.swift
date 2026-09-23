@@ -142,6 +142,11 @@ final class DriverMonitor: ObservableObject {
                 self.applyTemporalLogic(instantState: instant)
                 self.drowsinessCoordinator?.ingest(sample)
             }
+
+            #if DEBUG
+            // Diagnostic only: compare Vision orientations; does not affect production ingest.
+            DrowsinessOrientationDebugProbe.considerProbe(pixelBuffer: pixelBuffer)
+            #endif
         } catch {
             // Still emit a masked all-zero sample so the temporal stream stays aligned.
             let sample = DrowsinessFeatureExtractor.makeSample(
