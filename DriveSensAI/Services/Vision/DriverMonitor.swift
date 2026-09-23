@@ -118,7 +118,7 @@ final class DriverMonitor: ObservableObject {
 
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
-            orientation: .leftMirrored,
+            orientation: .upMirrored,
             options: [:]
         )
 

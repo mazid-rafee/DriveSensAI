@@ -62,6 +62,12 @@ enum DrowsinessFeatureExtractor {
             values[index] = 0.0
         }
 
+        print("Yaw: \(values[1]), Pitch: \(values[2]), Roll: \(values[3])")
+        print("Left Eye: \(left.valid), Right Eye: \(right.valid)")
+        print("Left Eye Aspect Ratio: \(left.aspectRatio), Right Eye Aspect Ratio: \(right.aspectRatio)")
+        print("Left Eye Pupil Rel X: \(left.pupilRelX), Right Eye Pupil Rel X: \(right.pupilRelX)")
+        print("Left Eye Pupil Rel Y: \(left.pupilRelY), Right Eye Pupil Rel Y: \(right.pupilRelY)")
+
         return DrowsinessFeatureSample(timestampMs: timestampMs, values: values)
     }
 
