@@ -53,7 +53,7 @@ undefined  -> 4
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DROWSINESS_CHECKPOINT_PATH` | `saved_weights/best_loss.pt` | Must be a **v2** checkpoint |
+| `DROWSINESS_CHECKPOINT_PATH` | `saved_weights/best_loss_v2.pt` | Must be a **v2** checkpoint |
 | `DROWSINESS_API_KEY` | unset | When set, require `X-API-Key` |
 | `DROWSINESS_DEVICE` | `auto` | `auto` → CUDA if available else CPU |
 | `DROWSINESS_HOST` | `0.0.0.0` | Bind host |
@@ -69,7 +69,7 @@ source .venv/bin/activate
 pip install -r api/requirements.txt
 
 # After training a v2 model (not done in the schema phase):
-export DROWSINESS_CHECKPOINT_PATH=saved_weights/best_loss.pt
+export DROWSINESS_CHECKPOINT_PATH=saved_weights/best_loss_v2.pt
 export DROWSINESS_API_KEY=...
 export DROWSINESS_SAMPLING_RATE_HZ=15.0
 

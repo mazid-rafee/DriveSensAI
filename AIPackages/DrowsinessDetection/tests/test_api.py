@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 # Force deterministic local settings before importing the app module.
 os.environ["DROWSINESS_DEVICE"] = "cpu"
-os.environ["DROWSINESS_CHECKPOINT_PATH"] = "saved_weights/best_accuracy_v2.pt"
+os.environ["DROWSINESS_CHECKPOINT_PATH"] = "saved_weights/best_loss_v2.pt"
 os.environ["DROWSINESS_API_KEY"] = "test-api-key-please-change"
 os.environ["DROWSINESS_SAMPLING_RATE_HZ"] = "15.0"
 
@@ -86,7 +86,7 @@ def _valid_request(contract: dict[str, Any], *, mutate: dict[str, Any] | None = 
 
 def test_health_returns_model_contract(client: TestClient, model_contract: dict[str, Any]) -> None:
     assert model_contract["status"] == "ok"
-    assert model_contract["model_version"] == "best_accuracy_v2"
+    assert model_contract["model_version"] == "best_loss_v2"
     assert model_contract["feature_schema_version"] == FEATURE_SCHEMA_VERSION
     assert model_contract["schema_version"] == FEATURE_SCHEMA_VERSION
     assert model_contract["feature_count"] == 14

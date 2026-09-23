@@ -23,11 +23,11 @@ from inference import (  # noqa: E402
 )
 from label_contract import CLASS_TO_IDX, NUM_CLASSES  # noqa: E402
 
-CHECKPOINT = PACKAGE_ROOT / "saved_weights" / "best_accuracy_v2.pt"
+CHECKPOINT = PACKAGE_ROOT / "saved_weights" / "best_loss_v2.pt"
 LEGACY_SMOKE = PACKAGE_ROOT / "saved_weights" / "schema_v2_smoke.pt"
 
 
-@pytest.mark.skipif(not CHECKPOINT.is_file(), reason="best_accuracy_v2.pt missing")
+@pytest.mark.skipif(not CHECKPOINT.is_file(), reason="best_loss_v2.pt missing")
 def test_load_v2_checkpoint_three_classes() -> None:
     model, ckpt, window = load_checkpoint(CHECKPOINT, torch.device("cpu"))
     assert ckpt["feature_schema_version"] == FEATURE_SCHEMA_VERSION
@@ -39,7 +39,7 @@ def test_load_v2_checkpoint_three_classes() -> None:
     assert model.num_classes == NUM_CLASSES
 
 
-@pytest.mark.skipif(not CHECKPOINT.is_file(), reason="best_accuracy_v2.pt missing")
+@pytest.mark.skipif(not CHECKPOINT.is_file(), reason="best_loss_v2.pt missing")
 def test_normalize_and_predict_shape() -> None:
     model, ckpt, window = load_checkpoint(CHECKPOINT, torch.device("cpu"))
     raw = np.zeros((window, 14), dtype=np.float32)

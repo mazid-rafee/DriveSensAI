@@ -10,7 +10,7 @@ import torch
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_CHECKPOINT_RELATIVE = "saved_weights/best_accuracy_v2.pt"
+DEFAULT_CHECKPOINT_RELATIVE = "saved_weights/best_loss_v2.pt"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8001
 DEFAULT_DEVICE = "auto"

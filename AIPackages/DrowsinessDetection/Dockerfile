@@ -3,7 +3,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DROWSINESS_DEVICE=cpu \
-    DROWSINESS_CHECKPOINT_PATH=saved_weights/best_loss.pt \
+    DROWSINESS_CHECKPOINT_PATH=saved_weights/best_loss_v2.pt \
     DROWSINESS_HOST=0.0.0.0 \
     DROWSINESS_PORT=8001
 
@@ -20,7 +20,7 @@ COPY api /app/api
 COPY model /app/model
 COPY pre_process /app/pre_process
 COPY dataloader.py device.py inference.py loss.py metrics.py train.py /app/
-COPY saved_weights/best_loss.pt /app/saved_weights/best_loss.pt
+COPY saved_weights/best_loss_v2.pt /app/saved_weights/best_loss_v2.pt
 
 RUN useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app
