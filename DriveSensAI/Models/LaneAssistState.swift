@@ -39,6 +39,24 @@ struct LaneTrackingResult: Equatable {
     )
 }
 
+/// Frame-level lane perception (no EMA / speed / drift). Coordinates are normalized top-left (y=0 top).
+struct LanePerceptionResult: Sendable {
+    let leftLanePoints: [CGPoint]
+    let rightLanePoints: [CGPoint]
+    let leftXAtEvaluationY: CGFloat?
+    let rightXAtEvaluationY: CGFloat?
+    /// Frame-level score; same CGFloat convention as `LaneTrackingResult.confidence`.
+    let confidence: CGFloat
+
+    static let empty = LanePerceptionResult(
+        leftLanePoints: [],
+        rightLanePoints: [],
+        leftXAtEvaluationY: nil,
+        rightXAtEvaluationY: nil,
+        confidence: 0
+    )
+}
+
 #if DEBUG
 /// Extra geometry for the DEBUG lane overlay (not used in production UI).
 struct LaneDebugSnapshot: Equatable {
@@ -55,5 +73,10 @@ struct LaneDebugSnapshot: Equatable {
     var vehicleCenterX: CGFloat = 0.50
     var confidence: CGFloat = 0
     var lateralOffset: CGFloat = 0
+    /// Fitted polylines from the current backend frame (normalized top-left).
+    var leftLanePoints: [CGPoint] = []
+    var rightLanePoints: [CGPoint] = []
+    /// Unsmoothed backend confidence for this frame.
+    var frameConfidence: CGFloat = 0
 }
 #endif
