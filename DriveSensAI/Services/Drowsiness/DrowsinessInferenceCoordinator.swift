@@ -30,8 +30,8 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
     private let windowFrames = DrowsinessFeatureContract.windowFrames
     private let maxBuffer = DrowsinessFeatureContract.windowFrames * 4
     private let sendInterval: TimeInterval = 1.0
-    private let wakeUpCloseThreshold = 1
-    private let wakeHoldDuration: TimeInterval = 5.0
+    private let wakeUpCloseThreshold = 4
+    private let wakeHoldDuration: TimeInterval = 0.4
     private static let closedLabel = "closed"
 
     func start() {

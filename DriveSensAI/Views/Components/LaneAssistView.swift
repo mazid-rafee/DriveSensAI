@@ -17,43 +17,45 @@ struct LaneAssistView: View {
     #endif
 
     var body: some View {
-        VStack(spacing: 2) {
-            Text(LaneAssistStatusText.text(for: result.state))
-                .font(.system(size: 8, weight: .bold))
-                .tracking(0.2)
-                .foregroundStyle(LaneAssistStatusText.color(for: result.state))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity)
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
 
-            GeometryReader { geo in
-                let w = geo.size.width
-                let h = geo.size.height
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.12, green: 0.13, blue: 0.15),
-                                    Color(red: 0.08, green: 0.09, blue: 0.10)
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.12, green: 0.13, blue: 0.15),
+                                Color(red: 0.08, green: 0.09, blue: 0.10)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
                         )
+                    )
 
-                    laneLines(width: w, height: h)
-                    carGlyph(width: w, height: h)
+                laneLines(width: w, height: h)
+                carGlyph(width: w, height: h)
 
-                    #if DEBUG
-                    if showDebugOverlay, let dbg = debugSnapshot {
-                        debugOverlay(dbg)
-                    }
-                    #endif
+                #if DEBUG
+                if showDebugOverlay, let dbg = debugSnapshot {
+                    debugOverlay(dbg)
                 }
+                #endif
             }
-            .frame(height: roadHeight)
+            .overlay(alignment: .top) {
+                Text(LaneAssistStatusText.text(for: result.state))
+                    .font(.system(size: 8, weight: .bold))
+                    .tracking(0.2)
+                    .foregroundStyle(LaneAssistStatusText.color(for: result.state))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 6)
+                    .padding(.top, 6)
+            }
         }
+        .frame(height: roadHeight)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(LaneAssistStatusText.text(for: result.state))
     }
