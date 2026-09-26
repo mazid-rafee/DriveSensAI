@@ -19,6 +19,18 @@ struct DriveView: View {
     /// Stable owner for the non-Observable MultiCamManager + published UI status.
     @StateObject private var multiCamOwner = MultiCamSessionOwner()
 
+    /// Drive mode is opt-in each time this view is presented.
+    @State private var isDriveModeOn = false
+
+    /// Keep driving controls hidden until the asynchronous camera start succeeds.
+    private var isDriveModeReady: Bool {
+        isDriveModeOn && multiCamOwner.isActive
+    }
+
+    private var driveModeButtonColor: Color {
+        isDriveModeOn ? Color(red: 1, green: 0.75, blue: 0) : Color(uiColor: color.accent)
+    }
+
     /// Bridged from Google Navigation overspeed callbacks (unavailable outside guidance).
     @State private var speedingState: SpeedingState = .unavailable
     /// Raw Navigation SDK speeding fraction; `nil` outside guidance / after reset.
@@ -37,22 +49,55 @@ struct DriveView: View {
             VStack(spacing: 8) {
                 topBar
 
-                // Map fills remaining height; telemetry stays compact so the map stays dominant.
+                // Keep navigation visible even when driving detection is off.
                 NavigationView(
                     speedingState: $speedingState,
                     percentageAboveLimit: $percentageAboveLimit
                 )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                lowerTelemetry
-                    .fixedSize(horizontal: false, vertical: true)
+                if !isDriveModeReady {
+                    Button(action: startDriveMode) {
+                        HStack(spacing: 10) {
+                            if isDriveModeOn {
+                                ProgressView()
+                                    .tint(.black)
+                            } else {
+                                Image(systemName: "car.fill")
+                                    .font(.system(size: 17, weight: .semibold))
+                            }
+                            Text(isDriveModeOn ? "Starting Drive Mode…" : "Start Drive")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 52)
+                            .foregroundStyle(isDriveModeOn ? .black : .white)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(driveModeButtonColor)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .allowsHitTesting(!isDriveModeOn)
+                    .shadow(color: driveModeButtonColor.opacity(0.25), radius: 10, y: 4)
+                    .accessibilityHint(isDriveModeOn ? "Driving services are starting" : "Starts driving detection and alerts")
+                }
+
+                if isDriveModeReady {
+                    lowerTelemetry
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 8)
 
             // TEMP: pin wake banner above the map when closed is detected (5s hold).
-            if drowsinessRemote.isWakeUpAlertActive {
+            if isDriveModeReady && drowsinessRemote.isWakeUpAlertActive {
                 wakeUpDebugBanner
                     .padding(.horizontal, 16)
                     .padding(.top, 44)
@@ -71,21 +116,11 @@ struct DriveView: View {
         .animation(.easeInOut(duration: 0.2), value: drowsinessRemote.isWakeUpAlertActive)
         .animation(.easeInOut(duration: 0.2), value: drowsinessRemote.latestPrediction?.label)
         .animation(.easeInOut(duration: 0.2), value: wakeUpDebugBannerTitle)
-        .onAppear {
-            startMultiCamIfNeeded()
-            speedMonitor.start()
-            alertManager.start()
-            drowsinessRemote.start()
-            syncLaneSpeedGate()
-            syncADASAlerts()
-        }
         .onDisappear {
-            alertManager.stop()
-            drowsinessRemote.stop()
-            stopMultiCam()
-            speedMonitor.stop()
+            stopDriveMode()
         }
         .onReceive(roadDetector.$detections) { detections in
+            guard isDriveModeOn else { return }
             let timestamp = ProcessInfo.processInfo.systemUptime
             roadRiskAnalyzer.update(detections: detections, timestamp: timestamp)
             pedestrianRiskAnalyzer.update(detections: detections, timestamp: timestamp)
@@ -116,7 +151,7 @@ struct DriveView: View {
         .onChange(of: drowsinessRemote.isWakeUpAlertActive) { wasActive, isActive in
             syncADASAlerts()
             // Beep only when the banner becomes visible (rising edge).
-            if isActive, !wasActive {
+            if isDriveModeReady, isActive, !wasActive {
                 alertManager.playWakeUpBeep()
             }
         }
@@ -134,6 +169,7 @@ struct DriveView: View {
 
     /// Feeds centralized alert manager from explicit state changes only.
     private func syncADASAlerts() {
+        guard isDriveModeReady else { return }
         alertManager.update(
             driverAttention: driverMonitor.attentionState,
             roadRisk: roadRiskAnalyzer.state,
@@ -144,25 +180,31 @@ struct DriveView: View {
     }
 
     private func syncLaneSpeedGate() {
+        guard isDriveModeOn else { return }
         laneDetector.updateSpeed(
             mph: speedMonitor.speedMPH,
             reliable: speedMonitor.hasReliableSpeed
         )
     }
 
-    /// Compact strip under the map: optional warning → speed | lane | over-limit → ADAS chips → footer.
+    /// Reserve banner space so warning changes never resize the navigation map.
     private var lowerTelemetry: some View {
         VStack(spacing: 6) {
-            if let banner = warningBanner {
-                WarningBannerView(title: banner.title, style: banner.style)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+            ZStack {
+                if let banner = warningBanner {
+                    WarningBannerView(title: banner.title, style: banner.style)
+                        .transition(.opacity)
+                } else {
+                    Label("Monitoring road", systemImage: "eye.fill")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
             }
+            .frame(maxWidth: .infinity)
+            .frame(height: 36)
 
             instrumentClusterRow
-
-            adasStatusRow
-
-            onDeviceFooter
         }
     }
 
@@ -190,66 +232,72 @@ struct DriveView: View {
 
             Spacer()
 
-            liveIndicator
+            if isDriveModeReady {
+                Button(action: stopDriveMode) {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "car.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .frame(width: 64, height: 24)
+                    .foregroundStyle(.white)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color(uiColor: color.red))
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Drive Mode Off")
+                .accessibilityHint("Stops driving detection and alerts")
+            }
         }
     }
 
-    private var liveIndicator: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(multiCamOwner.isActive ? Color.green : Color.orange)
-                .frame(width: 8, height: 8)
+    // MARK: - Instrument area: lane left, speed and status right
 
-            Text(multiCamOwner.isActive ? "LIVE" : (multiCamOwner.errorMessage == nil ? "STARTING" : "CAMERA ERROR"))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(multiCamOwner.isActive ? Color.green : Color.orange)
-        }
-        .accessibilityLabel(multiCamOwner.isActive ? "Live" : "Camera error")
-    }
-
-    // MARK: - Instrument row: speed | lane | over-limit (compact, centered)
-
-    private let laneRoadHeight: CGFloat = 46
+    private let laneRoadHeight: CGFloat = 184 // Four times the previous 46-point road height.
 
     private var instrumentClusterRow: some View {
-        HStack(alignment: .center, spacing: 16) {
-            speedColumn
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            laneAssistColumn
-                .frame(width: 64)
-            overLimitColumn
-                .frame(maxWidth: .infinity, alignment: .leading)
+        GeometryReader { geometry in
+            let columnWidth = (geometry.size.width - 8) / 2
+            HStack(alignment: .top, spacing: 8) {
+                laneAssistColumn
+                    .frame(width: columnWidth, height: laneRoadHeight)
+
+                VStack(spacing: 6) {
+                    speedColumn
+                        .layoutPriority(1)
+                    driverStatusCard
+                        .fixedSize(horizontal: false, vertical: true)
+                    roadStatusCard
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(width: columnWidth, height: laneRoadHeight, alignment: .top)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(speedAccessibilityLabel)
+        .frame(height: laneRoadHeight)
     }
 
     private var speedColumn: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text("SPEED MPH")
+        VStack(spacing: 4) {
+            Text("SPEED / LIMIT · MPH")
                 .font(.system(size: 10, weight: .bold))
                 .tracking(0.4)
                 .foregroundStyle(.secondary)
-            Text(speedDisplayText)
-                .font(.system(size: 28, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(speedForeground)
-        }
-    }
 
-    /// Right column — same horizontal layout as former LIMIT; shows MPH over posted limit.
-    private var overLimitColumn: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(overLimitDisplayText)
-                .font(.system(size: 28, weight: .semibold, design: .rounded))
+            (Text(speedDisplayText).foregroundColor(speedForeground)
+                + Text(" / ").foregroundColor(.secondary)
+                + Text(speedLimitDisplayText).foregroundColor(.primary))
+                .font(.system(size: 23, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(.primary.opacity(0.92))
-            Text("OVER LIMIT")
-                .font(.system(size: 10, weight: .bold))
-                .tracking(0.4)
-                .foregroundStyle(.secondary)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 6)
+        .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(speedAccessibilityLabel)
     }
 
     @ViewBuilder
@@ -274,6 +322,15 @@ struct DriveView: View {
             return "--"
         }
         return "\(Int(mph.rounded()))"
+    }
+
+    /// The percentage callback cannot reveal the limit while the driver is at/below it.
+    private var speedLimitDisplayText: String {
+        guard speedMonitor.hasReliableSpeed,
+              let mph = speedMonitor.speedMPH,
+              let percentage = percentageAboveLimit,
+              percentage > 0 else { return "--" }
+        return "\(Int((mph / (1.0 + Double(percentage))).rounded()))"
     }
 
     /// Whole MPH over the posted limit from Nav SDK percentage + GPS speed.
@@ -316,14 +373,10 @@ struct DriveView: View {
         } else {
             speedPart = "Speed unavailable"
         }
-        switch overLimitDisplayText {
-        case "--":
-            return "\(speedPart), over limit unavailable"
-        case "0":
-            return "\(speedPart), not over limit"
-        default:
-            return "\(speedPart), \(overLimitDisplayText) over limit"
-        }
+        let limitPart = speedLimitDisplayText == "--"
+            ? "speed limit unavailable"
+            : "speed limit \(speedLimitDisplayText) miles per hour"
+        return "\(speedPart), \(limitPart)"
     }
 
     private func logOverLimitIfNeeded() {
@@ -370,35 +423,76 @@ struct DriveView: View {
         #endif
     }
 
-    // MARK: - Expandable ADAS status row
+    // MARK: - ADAS status column
 
-    /// DRIVER + ROAD status chips.
-    private var adasStatusRow: some View {
-        HStack(spacing: 6) {
-            ADASStatusItem(
-                icon: "person.fill",
-                title: "DRIVER",
-                status: driverDisplayText,
-                tone: driverTone
-            )
-            ADASStatusItem(
-                icon: unifiedRoadDisplay.iconName,
-                title: "ROAD",
-                status: roadDisplayText,
-                tone: roadTone
-            )
+    private var driverStatusCard: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Image(systemName: "person.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(width: 16, height: 16)
+                    .foregroundStyle(.secondary)
+                Text("Driver Status")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(driverDisplayText)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(driverStatusColor)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Driver, \(driverDisplayText)")
+    }
+
+    private var driverStatusColor: Color {
+        switch driverMonitor.attentionState {
+        case .attentive: return Color(uiColor: color.accent)
+        case .lookingAway: return Color(uiColor: color.red)
+        case .noFace: return .orange
         }
     }
 
-    private var onDeviceFooter: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "lock.fill")
-                .font(.caption2)
-            Text("On-device AI")
-                .font(.caption2.weight(.medium))
+    /// The ROAD card presents the prioritized vehicle or pedestrian result.
+    private var roadStatusCard: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Image(systemName: "road.lanes.curved.right")
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(width: 16, height: 16)
+                    .foregroundStyle(.secondary)
+                Text("Road Status")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(roadDisplayText)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(roadStatusColor)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
         }
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Road, \(roadDisplayText)")
+    }
+
+    private var roadStatusColor: Color {
+        switch unifiedRoadDisplay {
+        case .clear, .vehicleAhead, .pedestrianAhead:
+            return Color(uiColor: color.accent)
+        case .unavailable, .closingVehicle:
+            return .orange
+        case .rapidClosing, .pedestrianClose:
+            return Color(uiColor: color.red)
+        }
     }
 
     // MARK: - Display mapping (UI only)
@@ -503,12 +597,34 @@ struct DriveView: View {
         #endif
     }
 
-    // MARK: - MultiCam lifecycle (unchanged behavior)
+    // MARK: - Drive mode and MultiCam lifecycle
+
+    private func startDriveMode() {
+        guard !isDriveModeOn else { return }
+        isDriveModeOn = true
+        speedMonitor.start()
+        drowsinessRemote.start()
+        syncLaneSpeedGate()
+        startMultiCamIfNeeded()
+    }
+
+    private func stopDriveMode() {
+        guard isDriveModeOn else { return }
+        isDriveModeOn = false
+        alertManager.stop()
+        drowsinessRemote.stop()
+        stopMultiCam()
+        speedMonitor.stop()
+        speedingState = .unavailable
+        percentageAboveLimit = nil
+    }
 
     private func startMultiCamIfNeeded() {
-        guard !multiCamOwner.hasStarted else { return }
+        guard !multiCamOwner.hasStarted, !multiCamOwner.isStopping else { return }
         multiCamOwner.hasStarted = true
         multiCamOwner.errorMessage = nil
+        let startID = UUID()
+        multiCamOwner.startID = startID
 
         // External processing only — do NOT call legacy CameraManager start APIs.
         driverMonitor.drowsinessCoordinator = drowsinessRemote
@@ -526,26 +642,42 @@ struct DriveView: View {
         }
 
         manager.requestAccessAndStart { result in
+            guard multiCamOwner.startID == startID, isDriveModeOn else {
+                if case .success = result, !isDriveModeOn {
+                    manager.stop { }
+                }
+                return
+            }
             switch result {
             case .success:
                 multiCamOwner.isActive = true
                 multiCamOwner.errorMessage = nil
+                alertManager.start()
+                syncADASAlerts()
             case .failure(let error):
                 multiCamOwner.isActive = false
                 multiCamOwner.errorMessage = error.localizedDescription
+                multiCamOwner.startID = nil
+                manager.onFrontFrame = nil
+                manager.onRearFrame = nil
                 driverMonitor.endExternalFrameProcessing()
                 roadDetector.endExternalFrameProcessing()
                 laneDetector.endExternalFrameProcessing()
                 roadRiskAnalyzer.reset()
                 pedestrianRiskAnalyzer.reset()
-                // Allow a later onAppear retry after a failed start.
+                // Restore the start button and stop services after a failed start.
                 multiCamOwner.hasStarted = false
+                stopDriveMode()
             }
         }
     }
 
     private func stopMultiCam() {
-        guard multiCamOwner.hasStarted || multiCamOwner.isActive else { return }
+        guard !multiCamOwner.isStopping,
+              multiCamOwner.hasStarted || multiCamOwner.isActive else { return }
+
+        multiCamOwner.startID = nil
+        multiCamOwner.isStopping = true
 
         multiCamOwner.manager.onFrontFrame = nil
         multiCamOwner.manager.onRearFrame = nil
@@ -558,6 +690,10 @@ struct DriveView: View {
         multiCamOwner.manager.stop {
             multiCamOwner.isActive = false
             multiCamOwner.hasStarted = false
+            multiCamOwner.isStopping = false
+            if isDriveModeOn {
+                startMultiCamIfNeeded()
+            }
         }
     }
 }
@@ -570,6 +706,8 @@ final class MultiCamSessionOwner: ObservableObject {
     @Published var isActive = false
     @Published var errorMessage: String?
     var hasStarted = false
+    var isStopping = false
+    var startID: UUID?
 }
 
 #Preview {
