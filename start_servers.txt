@@ -7,3 +7,7 @@ python -m uvicorn api.app:app --host 0.0.0.0 --port 8000
 conda activate dmd
 cd /Users/zaimazarnaz/Desktop/IOSApps/DriveSensAI/AIPackages/DrowsinessDetection
 python -m uvicorn api.app:app --host 0.0.0.0 --port 8001
+
+# On wifi change, get current server IP using:
+ipconfig getifaddr en0
+# Then paste the IP in the DriveSensAI.xcconfig file
