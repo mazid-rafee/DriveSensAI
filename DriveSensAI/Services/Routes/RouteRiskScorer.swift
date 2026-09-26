@@ -61,11 +61,12 @@ enum RouteSafetyStyle {
     }
 }
 
-/// `safetyScore(route) = severity_weighted_sum` for the active (departure) 3-hour bin.
-/// Lower sum = safer. Routes with OOV fraction &gt; 97% are marked insufficient (gray, score 0).
+/// Route risk = sum of adjusted per-cell risks (unique H3). Lower risk ranks safer.
+/// UI displays safety as `1 − routeRisk`. Routes with OOV fraction > 97% are insufficient.
 enum RouteRiskScorer {
-    /// Applies active-bin model sums → safety scores and relative tiers.
-    /// Does not reorder the array (Google / extraction order is preserved).
+    static let highHourGapWeight = 0.30
+
+    /// Applies adjusted route risk → `ComputedRoute.safetyScore` (stores risk, not `1 − risk`).
     static func applyingPredictionScores(
         to routes: [ComputedRoute],
         response: RoutePredictionResponse
@@ -93,16 +94,15 @@ enum RouteRiskScorer {
                 return copy
             }
 
-            let sum = prediction.predictionSummary.sum
-            if sum.isFinite {
-                copy.safetyScore = sum
+            let risk = adjustedRouteRisk(prediction)
+            if risk.isFinite {
+                copy.safetyScore = risk
             } else {
                 copy.safetyScore = nil
             }
             return copy
         }
 
-        // Tiers only among routes with enough in-vocabulary coverage.
         let informativeRankedIDs = rankedSafestFirst(scored)
             .filter { !$0.hasInsufficientSafetyInfo && $0.safetyScore != nil }
             .map(\.id)
@@ -117,7 +117,35 @@ enum RouteRiskScorer {
         return scored
     }
 
-    /// True when OOV cells are more than 97% of traversed H3 cells (or no cells).
+    /// Per-cell adjusted risk for one unique H3 cell.
+    static func adjustedCellRisk(current: Double, cellP90: Double) -> Double {
+        guard current.isFinite, cellP90.isFinite, current >= 0, cellP90 >= 0 else {
+            return .nan
+        }
+        return current + highHourGapWeight * max(0, cellP90 - current)
+    }
+
+    /// Sum adjusted risk once per unique H3 using trip-time severity and cell P90 references.
+    static func adjustedRouteRisk(_ prediction: RoutePrediction) -> Double {
+        guard !prediction.cells.isEmpty,
+              prediction.cells.allSatisfy({ $0.highHourSeverityWeightedRate != nil }) else {
+            return prediction.predictionSummary.sum
+        }
+
+        var seenCells: Set<String> = []
+        var sum = 0.0
+        for cell in prediction.cells {
+            guard seenCells.insert(cell.h3Cell).inserted else { continue }
+            let adjusted = adjustedCellRisk(
+                current: cell.severityWeightedRate,
+                cellP90: cell.highHourSeverityWeightedRate!
+            )
+            guard adjusted.isFinite else { return .nan }
+            sum += adjusted
+        }
+        return sum
+    }
+
     static func isInsufficientSafetyInfo(_ prediction: RoutePrediction) -> Bool {
         let total = prediction.cellCount
         guard total > 0 else { return true }
@@ -125,20 +153,16 @@ enum RouteRiskScorer {
         return oovFraction > RouteSafetyStyle.insufficientOOVFractionThreshold
     }
 
-    /// Ranked safest-first: lowest sum among informative routes, then insufficient/unscored last.
     static func rankedSafestFirst(_ routes: [ComputedRoute]) -> [ComputedRoute] {
         routes.sorted(by: saferThan)
     }
 
-    /// Safest informative route ID (lowest sum). Ignores insufficient-info routes.
     static func safestRouteID(in routes: [ComputedRoute]) -> String? {
         rankedSafestFirst(routes)
             .first(where: { !$0.hasInsufficientSafetyInfo && $0.safetyScore != nil })?
             .id
     }
 
-    /// Lower safety score (sum) ranks safer among informative routes.
-    /// Insufficient-info and missing scores sort last; ties by response index.
     static func saferThan(_ lhs: ComputedRoute, _ rhs: ComputedRoute) -> Bool {
         let leftOK = !lhs.hasInsufficientSafetyInfo && lhs.safetyScore != nil
         let rightOK = !rhs.hasInsufficientSafetyInfo && rhs.safetyScore != nil
@@ -189,7 +213,7 @@ enum RouteRiskScorer {
             let tier = route.safetyTier?.rawValue
                 ?? (route.hasInsufficientSafetyInfo ? "insufficient" : "nil")
             let selected = route.id == selectedRouteID
-            print("[ROUTE_SAFETY_SCORE] \(route.id) safety_sum=\(score) tier=\(tier) selected=\(selected)")
+            print("[ROUTE_SAFETY_SCORE] \(route.id) adjusted_risk=\(score) tier=\(tier) selected=\(selected)")
         }
     }
     #endif

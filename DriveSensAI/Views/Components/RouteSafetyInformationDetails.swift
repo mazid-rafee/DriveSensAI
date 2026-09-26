@@ -22,13 +22,15 @@ struct RouteSafetyDetailsModel: Equatable {
     let propertyRate: Double?
     let societyRate: Double?
     let otherRate: Double?
-    /// Severity-weighted route sum keyed by 3-hour bin start (0, 3, …, 21).
-    let severitySumByHourBin: [Int: Double]
+    /// Display safety score (`1 − adjusted risk`) keyed by training time-bin start hour.
+    let safetyScoreByHourBin: [Int: Double]
+    /// False when the API omitted per-bin adjusted risk (legacy server).
+    let hourlySafetyChartAvailable: Bool
     let cellCount: Int
     let scoredCellCount: Int
     let outOfVocabularyCount: Int
 
-    /// Training 3-hour bin starts used by CrimePredictor.
+    /// Training time-bin starts (`TIME_BIN_HOURS = 3` in CrimePredictor `time_bins.py`).
     static let hourBinStarts: [Int] = [0, 3, 6, 9, 12, 15, 18, 21]
 
     static func build(
@@ -64,19 +66,29 @@ struct RouteSafetyDetailsModel: Equatable {
                 propertyRate: nil,
                 societyRate: nil,
                 otherRate: nil,
-                severitySumByHourBin: [:],
+                safetyScoreByHourBin: [:],
+                hourlySafetyChartAvailable: false,
                 cellCount: 0,
                 scoredCellCount: 0,
                 outOfVocabularyCount: 0
             )
         }
 
-        var severitySumByHourBin: [Int: Double] = [:]
-        for binScore in prediction.timeBinScores {
-            severitySumByHourBin[binScore.hourBinStart] = binScore.severityWeightedSum
+        let chartAvailable = Self.hasAdjustedHourlyScores(prediction.timeBinScores)
+        var safetyScoreByHourBin: [Int: Double] = [:]
+        if chartAvailable {
+            for binScore in prediction.timeBinScores {
+                if let adjustedRisk = binScore.adjustedSeverityWeightedSum, adjustedRisk.isFinite {
+                    safetyScoreByHourBin[binScore.hourBinStart] = 1 - adjustedRisk
+                }
+            }
         }
 
         let activeBin = prediction.activeHourBinStart
+        if let routeRisk = route.safetyScore, routeRisk.isFinite {
+            safetyScoreByHourBin[activeBin] = 1 - routeRisk
+        }
+
         let activeScore = prediction.timeBinScores.first {
             $0.hourBinStart == activeBin
         }
@@ -94,11 +106,19 @@ struct RouteSafetyDetailsModel: Equatable {
             propertyRate: activeScore?.meanPropertyRate,
             societyRate: activeScore?.meanSocietyRate,
             otherRate: activeScore?.meanOtherRate,
-            severitySumByHourBin: severitySumByHourBin,
+            safetyScoreByHourBin: safetyScoreByHourBin,
+            hourlySafetyChartAvailable: chartAvailable,
             cellCount: prediction.cellCount,
             scoredCellCount: prediction.scoredCellCount,
             outOfVocabularyCount: prediction.outOfVocabularyCount
         )
+    }
+
+    static func hasAdjustedHourlyScores(_ bins: [TimeBinSafetyScore]) -> Bool {
+        guard bins.count == hourBinStarts.count else { return false }
+        let expected = Set(hourBinStarts)
+        guard Set(bins.map(\.hourBinStart)) == expected else { return false }
+        return bins.allSatisfy { $0.adjustedSeverityWeightedSum?.isFinite == true }
     }
 }
 
@@ -106,11 +126,12 @@ struct RouteSafetyDetailsModel: Equatable {
 struct RouteSafetyInformationDetails: View {
     let model: RouteSafetyDetailsModel
 
-    private var chartRows: [(label: String, sum: Double, isActive: Bool)] {
-        RouteSafetyDetailsModel.hourBinStarts.map { bin in
-            (
+    private var chartRows: [(label: String, score: Double, isActive: Bool)] {
+        RouteSafetyDetailsModel.hourBinStarts.compactMap { bin in
+            guard let score = model.safetyScoreByHourBin[bin] else { return nil }
+            return (
                 Self.hourBinLabel(bin),
-                model.severitySumByHourBin[bin] ?? 0,
+                score,
                 model.activeHourBinStart == bin
             )
         }
@@ -138,7 +159,11 @@ struct RouteSafetyInformationDetails: View {
                 safetySummarySection
                 if !model.hasInsufficientSafetyInfo {
                     categoryRatesSection
-                    hourlyChartSection
+                    if model.hourlySafetyChartAvailable {
+                        hourlyChartSection
+                    } else {
+                        hourlyChartUnavailableSection
+                    }
                 }
             }
             .padding(18)
@@ -183,10 +208,10 @@ struct RouteSafetyInformationDetails: View {
                     value: model.safetyTierLabel,
                     valueColor: assessmentColor
                 )
-                if let score = model.safetyScore {
+                if let routeRisk = model.safetyScore, routeRisk.isFinite {
                     detailRow(
                         label: "Safety score",
-                        value: String(format: "%.2f", score)
+                        value: String(format: "%.2f", 1 - routeRisk)
                     )
                 }
             }
@@ -282,20 +307,30 @@ struct RouteSafetyInformationDetails: View {
         )
     }
 
+    private var hourlyChartUnavailableSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Safety score by hour")
+            Text("Hourly safety chart is unavailable until CrimePredictor returns adjusted time-bin scores.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var hourlyChartSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("Safety score by hour")
 
             Chart(chartRows, id: \.label) { row in
                 BarMark(
-                    x: .value("Safety score", row.sum),
+                    x: .value("Safety score", row.score),
                     y: .value("Time", row.label),
                     height: .ratio(0.78)
                 )
                 .foregroundStyle(
                     row.isActive
                         ? goGreen
-                        : goGreen.opacity(row.sum > 0 ? 0.45 : 0.15)
+                        : goGreen.opacity(row.score > 0 ? 0.45 : 0.15)
                 )
                 // Rounds the bar ends; for horizontal bars this rounds the left (origin) edge.
                 .cornerRadius(8, style: .continuous)

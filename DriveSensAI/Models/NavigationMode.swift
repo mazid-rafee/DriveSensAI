@@ -58,8 +58,8 @@ struct ComputedRoute: Equatable, Identifiable, Sendable {
     var steps: [ComputedRouteStep]
     /// Whether this candidate can produce a backend extraction payload.
     var isExtractionReady: Bool
-    /// Safety score from the CrimePredictor model: sum of per-cell `severity_weighted_rate`.
-    /// Lower = safer among informative routes. `0` when safety info is insufficient. `nil` until scored.
+    /// Route risk (sum of adjusted per-cell severity). Lower = safer. Display as `1 − safetyScore`.
+    /// `0` when safety info is insufficient. `nil` until scored.
     var safetyScore: Double?
     /// Relative safety tier among informative routes. `nil` when insufficient / unscored (gray UI).
     var safetyTier: RouteSafetyTier?

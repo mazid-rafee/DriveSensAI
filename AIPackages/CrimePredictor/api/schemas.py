@@ -136,6 +136,8 @@ class TimeBinSafetyScore(BaseModel):
     hour_bin_start: int
     # Sum of severity_weighted_rate over unique in-vocab H3 cells on the route.
     severity_weighted_sum: float
+    # Unique-cell adjusted risk sum for this bin (30% high-hour gap); omitted on legacy servers.
+    adjusted_severity_weighted_sum: float | None = None
     # Max per-cell severity_weighted_rate under this bin.
     max_severity_weighted_rate: float
     mean_person_rate: float
@@ -155,6 +157,8 @@ class CellPrediction(BaseModel):
     city_name: str
     # Model outputs nonnegative per-hour rates (softplus), not probabilities.
     severity_weighted_rate: float
+    # 90th percentile of this cell's severity across departure weekday/month time bins.
+    high_hour_severity_weighted_rate: float | None = None
     total_rate: float
     person_rate: float
     property_rate: float

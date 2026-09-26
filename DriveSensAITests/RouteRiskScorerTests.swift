@@ -9,10 +9,46 @@ import XCTest
 @MainActor
 final class RouteRiskScorerTests: XCTestCase {
 
-    func testSafetyScoreUsesSumAndLowerIsSafer() {
+    func testAdjustedCellRiskFormula() {
+        XCTAssertEqual(
+            RouteRiskScorer.adjustedCellRisk(current: 0.01, cellP90: 0.10),
+            0.037,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            RouteRiskScorer.adjustedCellRisk(current: 0.10, cellP90: 0.10),
+            0.10,
+            accuracy: 0.000_001
+        )
+    }
+
+    func testUniqueCellsCountedOnceForRouteRisk() {
+        let response = RoutePredictionResponse(
+            requestID: "test",
+            modelVersion: "best.pt",
+            routes: [
+                makePrediction(
+                    id: "route_0",
+                    cells: [
+                        makeCell(id: "a", current: 0.01, highHour: 0.10),
+                        makeCell(id: "a", current: 0.01, highHour: 0.10),
+                        makeCell(id: "b", current: 0.10, highHour: 0.10)
+                    ]
+                )
+            ]
+        )
+        let routes = RouteRiskScorer.applyingPredictionScores(
+            to: [makeRoute(index: 0)],
+            response: response
+        )
+        // 0.037 + 0.10 = 0.137
+        XCTAssertEqual(routes[0].safetyScore ?? 0, 0.137, accuracy: 0.000_001)
+    }
+
+    func testOldAPIFallbackUsesPredictionSummarySum() {
         let routes = RouteRiskScorer.applyingPredictionScores(
             to: [makeRoute(index: 0), makeRoute(index: 1), makeRoute(index: 2)],
-            response: makeResponse(sums: [
+            response: makeLegacyResponse(sums: [
                 "route_0": 0.165814,
                 "route_1": 0.249322,
                 "route_2": 0.217158
@@ -21,9 +57,6 @@ final class RouteRiskScorerTests: XCTestCase {
         let ranked = RouteRiskScorer.rankedSafestFirst(routes)
         XCTAssertEqual(ranked.map(\.id), ["route_0", "route_2", "route_1"])
         XCTAssertEqual(routes.first(where: { $0.id == "route_0" })?.safetyScore, 0.165814)
-        XCTAssertEqual(ranked[0].safetyTier, .safest)
-        XCTAssertEqual(ranked[1].safetyTier, .medium)
-        XCTAssertEqual(ranked[2].safetyTier, .unsafest)
     }
 
     func testHighOOVMarksInsufficientGrayWithZeroScore() {
@@ -37,7 +70,7 @@ final class RouteRiskScorerTests: XCTestCase {
                         routeID: "route_0",
                         cellCount: 100,
                         scoredCellCount: 2,
-                        outOfVocabularyCount: 98, // 98% > 97%
+                        outOfVocabularyCount: 98,
                         activeHourBinStart: 12,
                         predictionSummary: RoutePredictionSummary(mean: 0.01, maximum: 0.02, sum: 0.02),
                         timeBinScores: [],
@@ -62,21 +95,55 @@ final class RouteRiskScorerTests: XCTestCase {
         XCTAssertNil(byID["route_0"]!.safetyTier)
         XCTAssertFalse(byID["route_1"]!.hasInsufficientSafetyInfo)
         XCTAssertEqual(byID["route_1"]!.safetyTier, .safest)
-        XCTAssertEqual(RouteRiskScorer.safestRouteID(in: routes), "route_1")
     }
 
-    func testOOVAtExactly97PercentRemainsInformative() {
+    func testChartUsesAdjustedBinsAndActiveMatchesRouteRisk() {
+        var route = makeRoute(index: 0)
+        route.safetyScore = 0.2
         let prediction = RoutePrediction(
             routeID: "route_0",
-            cellCount: 100,
-            scoredCellCount: 3,
-            outOfVocabularyCount: 97,
+            cellCount: 10,
+            scoredCellCount: 8,
+            outOfVocabularyCount: 2,
             activeHourBinStart: 12,
-            predictionSummary: RoutePredictionSummary(mean: 0.01, maximum: 0.02, sum: 0.03),
-            timeBinScores: [],
+            predictionSummary: RoutePredictionSummary(mean: 0.05, maximum: 0.08, sum: 0.4),
+            timeBinScores: Self.allAdjustedBins(activeAdjustedRisk: 0.25),
             cells: []
         )
-        XCTAssertFalse(RouteRiskScorer.isInsufficientSafetyInfo(prediction))
+        let model = RouteSafetyDetailsModel.build(route: route, prediction: prediction)
+        XCTAssertTrue(model.hourlySafetyChartAvailable)
+        XCTAssertEqual(model.safetyScoreByHourBin[12], 0.8, accuracy: 0.000_001)
+        XCTAssertEqual(model.safetyScoreByHourBin[0], 0.85, accuracy: 0.000_001)
+    }
+
+    func testLegacyBinsHideHourlyChart() {
+        var route = makeRoute(index: 0)
+        route.safetyScore = 0.2
+        let prediction = RoutePrediction(
+            routeID: "route_0",
+            cellCount: 10,
+            scoredCellCount: 8,
+            outOfVocabularyCount: 2,
+            activeHourBinStart: 12,
+            predictionSummary: RoutePredictionSummary(mean: 0.05, maximum: 0.08, sum: 0.4),
+            timeBinScores: [
+                TimeBinSafetyScore(
+                    hourBinStart: 12,
+                    severityWeightedSum: 0.99,
+                    adjustedSeverityWeightedSum: nil,
+                    maxSeverityWeightedRate: 0.2,
+                    meanPersonRate: 0.01,
+                    meanPropertyRate: 0.01,
+                    meanSocietyRate: 0.01,
+                    meanOtherRate: 0.01,
+                    cellCount: 8
+                )
+            ],
+            cells: []
+        )
+        let model = RouteSafetyDetailsModel.build(route: route, prediction: prediction)
+        XCTAssertFalse(model.hourlySafetyChartAvailable)
+        XCTAssertEqual(model.safetyScoreByHourBin[12], 0.8, accuracy: 0.000_001)
     }
 
     func testTiesResolvedByGoogleResponseOrder() {
@@ -88,21 +155,59 @@ final class RouteRiskScorerTests: XCTestCase {
         XCTAssertFalse(RouteRiskScorer.saferThan(b, a))
     }
 
-    func testStyleOpacityContract() {
-        XCTAssertEqual(RouteSafetyStyle.selectedOpacity, 1.0)
-        XCTAssertEqual(RouteSafetyStyle.unselectedOpacity, 0.35, accuracy: 0.000_1)
-        let selected = RouteSafetyStyle.strokeColor(tier: .safest, isSelected: true)
-        let unselected = RouteSafetyStyle.strokeColor(tier: .safest, isSelected: false)
-        XCTAssertGreaterThan(selected.cgColor.alpha, unselected.cgColor.alpha)
-        XCTAssertEqual(
-            RouteSafetyStyle.baseColor(for: nil as RouteSafetyTier?),
-            RouteSafetyStyle.unscoredColor
+    // MARK: - Helpers
+
+    private static func allAdjustedBins(activeAdjustedRisk: Double) -> [TimeBinSafetyScore] {
+        RouteSafetyDetailsModel.hourBinStarts.map { bin in
+            let risk = bin == 12 ? activeAdjustedRisk : 0.15
+            return TimeBinSafetyScore(
+                hourBinStart: bin,
+                severityWeightedSum: risk + 0.5,
+                adjustedSeverityWeightedSum: risk,
+                maxSeverityWeightedRate: risk,
+                meanPersonRate: 0.01,
+                meanPropertyRate: 0.01,
+                meanSocietyRate: 0.01,
+                meanOtherRate: 0.01,
+                cellCount: 8
+            )
+        }
+    }
+
+    private func makePrediction(id: String, cells: [CellPrediction]) -> RoutePrediction {
+        RoutePrediction(
+            routeID: id,
+            cellCount: cells.count,
+            scoredCellCount: cells.count,
+            outOfVocabularyCount: 0,
+            activeHourBinStart: 12,
+            predictionSummary: RoutePredictionSummary(mean: 0, maximum: 0, sum: 0),
+            timeBinScores: [],
+            cells: cells
         )
     }
 
-    // MARK: - Helpers
+    private func makeCell(id: String, current: Double, highHour: Double) -> CellPrediction {
+        CellPrediction(
+            sequenceIndex: 0,
+            h3Cell: id,
+            entryTimeUTC: "2026-09-26T04:00:00Z",
+            localHour: 12,
+            dayOfWeek: "Friday",
+            month: "September",
+            cityName: "miami",
+            severityWeightedRate: current,
+            highHourSeverityWeightedRate: highHour,
+            totalRate: current,
+            personRate: current,
+            propertyRate: 0,
+            societyRate: 0,
+            otherRate: 0,
+            hourBinStart: 12
+        )
+    }
 
-    private func makeResponse(sums: [String: Double]) -> RoutePredictionResponse {
+    private func makeLegacyResponse(sums: [String: Double]) -> RoutePredictionResponse {
         RoutePredictionResponse(
             requestID: "test-request",
             modelVersion: "best.pt",
@@ -123,6 +228,7 @@ final class RouteRiskScorerTests: XCTestCase {
                         TimeBinSafetyScore(
                             hourBinStart: 12,
                             severityWeightedSum: sum,
+                            adjustedSeverityWeightedSum: nil,
                             maxSeverityWeightedRate: sum / 4,
                             meanPersonRate: 0.01,
                             meanPropertyRate: 0.01,

@@ -69,6 +69,8 @@ struct RoutePredictionSummary: Codable, Sendable, Equatable {
 struct TimeBinSafetyScore: Codable, Sendable, Equatable {
     let hourBinStart: Int
     let severityWeightedSum: Double
+    /// Unique-cell adjusted route risk for this bin; nil on older CrimePredictor servers.
+    let adjustedSeverityWeightedSum: Double?
     let maxSeverityWeightedRate: Double
     let meanPersonRate: Double
     let meanPropertyRate: Double
@@ -79,6 +81,7 @@ struct TimeBinSafetyScore: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey {
         case hourBinStart = "hour_bin_start"
         case severityWeightedSum = "severity_weighted_sum"
+        case adjustedSeverityWeightedSum = "adjusted_severity_weighted_sum"
         case maxSeverityWeightedRate = "max_severity_weighted_rate"
         case meanPersonRate = "mean_person_rate"
         case meanPropertyRate = "mean_property_rate"
@@ -98,6 +101,8 @@ struct CellPrediction: Codable, Sendable, Equatable {
     let month: String
     let cityName: String
     let severityWeightedRate: Double
+    /// P90 severity across departure weekday/month time bins; nil on older CrimePredictor servers.
+    let highHourSeverityWeightedRate: Double?
     let totalRate: Double
     let personRate: Double
     let propertyRate: Double
@@ -114,6 +119,7 @@ struct CellPrediction: Codable, Sendable, Equatable {
         case month
         case cityName = "city_name"
         case severityWeightedRate = "severity_weighted_rate"
+        case highHourSeverityWeightedRate = "high_hour_severity_weighted_rate"
         case totalRate = "total_rate"
         case personRate = "person_rate"
         case propertyRate = "property_rate"
@@ -185,9 +191,10 @@ enum RoutePredictionDebugLogging {
                     + "mean=\(format(summary.mean)) max=\(format(summary.maximum)) sum=\(format(summary.sum))"
             )
             for binScore in route.timeBinScores {
+                let adjusted = binScore.adjustedSeverityWeightedSum.map(format) ?? "nil"
                 print(
                     "[CRIME_PREDICTION] \(route.routeID) bin=\(binScore.hourBinStart) "
-                        + "sum=\(format(binScore.severityWeightedSum))"
+                        + "sum=\(format(binScore.severityWeightedSum)) adjusted=\(adjusted)"
                 )
             }
         }

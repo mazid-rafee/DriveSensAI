@@ -46,6 +46,28 @@ if str(SRC_DIR) not in sys.path:
 from inference import CrimeRateInference  # noqa: E402
 from time_bins import HOUR_BIN_STARTS  # noqa: E402
 
+# Matches RouteRiskScorer.highHourGapWeight on iOS.
+HIGH_HOUR_GAP_WEIGHT = 0.30
+
+
+def _adjusted_severity_weighted_sum(
+    cells: list[RouteCellSample],
+    severities: list[float],
+    high_hour_by_h3: dict[str, float],
+    *,
+    gap_weight: float = HIGH_HOUR_GAP_WEIGHT,
+) -> float:
+    """Sum adjusted risk once per unique H3 cell for one time bin."""
+    seen: set[str] = set()
+    total = 0.0
+    for sample, current in zip(cells, severities):
+        if sample.h3_cell in seen:
+            continue
+        seen.add(sample.h3_cell)
+        high = high_hour_by_h3.get(sample.h3_cell, current)
+        total += current + gap_weight * max(0.0, high - current)
+    return total
+
 
 class ModelUnavailableError(RuntimeError):
     def __init__(self, message: str) -> None:
@@ -260,13 +282,14 @@ def _score_route_time_bins(
     *,
     month: int,
     day_of_week: int,
-) -> list[TimeBinSafetyScore]:
-    """Score the same route geometry under every 3-hour training bin."""
+) -> tuple[list[TimeBinSafetyScore], dict[str, float]]:
+    """Score each TIME_BIN bin; return per-bin scores and each cell's P90 severity."""
     if not cells:
-        return [
+        empty_scores = [
             TimeBinSafetyScore(
                 hour_bin_start=bin_start,
                 severity_weighted_sum=0.0,
+                adjusted_severity_weighted_sum=0.0,
                 max_severity_weighted_rate=0.0,
                 mean_person_rate=0.0,
                 mean_property_rate=0.0,
@@ -276,8 +299,10 @@ def _score_route_time_bins(
             )
             for bin_start in HOUR_BIN_STARTS
         ]
+        return empty_scores, {}
 
     scores: list[TimeBinSafetyScore] = []
+    cell_severity_by_bin: list[torch.Tensor] = []
     n_cells = len(cells)
     h3_idx = [artifacts.engine.h3_cell_to_index[sample.h3_cell] for sample in cells]
     city_idx = [artifacts.engine.city_to_index[sample.city_name] for sample in cells]
@@ -296,6 +321,7 @@ def _score_route_time_bins(
             device=rates.device, dtype=rates.dtype
         )
         severity = (rates * weights.unsqueeze(0)).sum(dim=1)
+        cell_severity_by_bin.append(severity)
         scores.append(
             TimeBinSafetyScore(
                 hour_bin_start=int(bin_start),
@@ -308,7 +334,24 @@ def _score_route_time_bins(
                 cell_count=n_cells,
             )
         )
-    return scores
+
+    high_hour_rates = torch.quantile(
+        torch.stack(cell_severity_by_bin), 0.9, dim=0
+    ).tolist()
+    high_hour_by_h3 = {
+        sample.h3_cell: float(rate)
+        for sample, rate in zip(cells, high_hour_rates)
+    }
+
+    adjusted_scores: list[TimeBinSafetyScore] = []
+    for index, score in enumerate(scores):
+        severities = [float(value) for value in cell_severity_by_bin[index].tolist()]
+        adjusted = _adjusted_severity_weighted_sum(cells, severities, high_hour_by_h3)
+        adjusted_scores.append(
+            score.model_copy(update={"adjusted_severity_weighted_sum": adjusted})
+        )
+
+    return adjusted_scores, high_hour_by_h3
 
 
 def _batched_forward(
@@ -379,6 +422,15 @@ def predict_routes(
     cursor = 0
     route_payloads: list[RoutePrediction] = []
     for route_id, samples, stats, route in route_samples:
+        unique_cells = _unique_route_cells(samples)
+        month, dow, _local_hour, active_bin = _departure_local_calendar(route, samples)
+        time_bin_scores, high_hour_by_h3 = _score_route_time_bins(
+            artifacts,
+            unique_cells,
+            month=month,
+            day_of_week=dow,
+        )
+
         cells: list[CellPrediction] = []
         for sample in samples:
             rates = flat_outputs[cursor]
@@ -393,6 +445,7 @@ def predict_routes(
                     month=sample.month_name,
                     city_name=sample.city_name,
                     severity_weighted_rate=rates["severity_weighted_rate"],
+                    high_hour_severity_weighted_rate=high_hour_by_h3.get(sample.h3_cell),
                     total_rate=rates["total_rate"],
                     person_rate=rates["person_rate"],
                     property_rate=rates["property_rate"],
@@ -402,14 +455,6 @@ def predict_routes(
                 )
             )
 
-        unique_cells = _unique_route_cells(samples)
-        month, dow, _local_hour, active_bin = _departure_local_calendar(route, samples)
-        time_bin_scores = _score_route_time_bins(
-            artifacts,
-            unique_cells,
-            month=month,
-            day_of_week=dow,
-        )
         active = next(
             (item for item in time_bin_scores if item.hour_bin_start == active_bin),
             time_bin_scores[0] if time_bin_scores else None,
@@ -418,12 +463,16 @@ def predict_routes(
             summary = PredictionSummary(mean=0.0, maximum=0.0, sum=0.0)
             active_bin = 0
         else:
-            # Ranking uses the active (departure) 3-hour bin severity sum.
+            active_risk = (
+                active.adjusted_severity_weighted_sum
+                if active.adjusted_severity_weighted_sum is not None
+                else active.severity_weighted_sum
+            )
             n = max(active.cell_count, 1)
             summary = PredictionSummary(
-                mean=active.severity_weighted_sum / n,
+                mean=active_risk / n,
                 maximum=active.max_severity_weighted_rate,
-                sum=active.severity_weighted_sum,
+                sum=active_risk,
             )
 
         route_payloads.append(

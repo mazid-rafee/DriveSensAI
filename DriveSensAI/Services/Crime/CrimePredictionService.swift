@@ -153,6 +153,9 @@ actor CrimePredictionService {
             for binScore in route.timeBinScores {
                 let prefix = "\(route.routeID).bin\(binScore.hourBinStart)"
                 try assertFinite(binScore.severityWeightedSum, label: "\(prefix).severity_weighted_sum")
+                if let adjusted = binScore.adjustedSeverityWeightedSum {
+                    try assertFinite(adjusted, label: "\(prefix).adjusted_severity_weighted_sum")
+                }
                 try assertFinite(binScore.maxSeverityWeightedRate, label: "\(prefix).max_severity_weighted_rate")
                 try assertFinite(binScore.meanPersonRate, label: "\(prefix).mean_person_rate")
                 try assertFinite(binScore.meanPropertyRate, label: "\(prefix).mean_property_rate")
@@ -161,6 +164,9 @@ actor CrimePredictionService {
             }
             for cell in route.cells {
                 try assertFinite(cell.severityWeightedRate, label: "\(route.routeID).severity_weighted_rate")
+                if let highHour = cell.highHourSeverityWeightedRate {
+                    try assertFinite(highHour, label: "\(route.routeID).high_hour_severity_weighted_rate")
+                }
                 try assertFinite(cell.totalRate, label: "\(route.routeID).total_rate")
                 try assertFinite(cell.personRate, label: "\(route.routeID).person_rate")
                 try assertFinite(cell.propertyRate, label: "\(route.routeID).property_rate")
