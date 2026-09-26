@@ -10,6 +10,8 @@ struct WarningBannerView: View {
         case urgent
         case caution
         case critical
+        /// Drowsiness closed-eyes alert.
+        case wakeUp
     }
 
     let title: String
@@ -39,7 +41,7 @@ struct WarningBannerView: View {
 
     private var iconName: String {
         switch style {
-        case .urgent, .critical:
+        case .urgent, .critical, .wakeUp:
             return "exclamationmark.triangle.fill"
         case .caution:
             return "person.crop.circle.badge.exclamationmark"
@@ -48,7 +50,7 @@ struct WarningBannerView: View {
 
     private var foreground: Color {
         switch style {
-        case .urgent, .critical:
+        case .urgent, .critical, .wakeUp:
             return .black
         case .caution:
             return .primary
@@ -57,10 +59,10 @@ struct WarningBannerView: View {
 
     private var background: Color {
         switch style {
-        case .urgent:
-            return .orange
+        case .urgent, .wakeUp:
+            return Color(uiColor: color.midRisk)
         case .critical:
-            return .red
+            return Color(uiColor: color.highRisk)
         case .caution:
             return Color.white.opacity(0.12)
         }
@@ -71,7 +73,7 @@ struct WarningBannerView: View {
     VStack(spacing: 12) {
         WarningBannerView(title: "WATCH THE ROAD", style: .urgent)
         WarningBannerView(title: "VEHICLE CLOSING", style: .critical)
-        WarningBannerView(title: "Wake up", style: .caution)
+        WarningBannerView(title: "Wake up", style: .wakeUp)
         WarningBannerView(title: "Driver not detected", style: .caution)
     }
     .padding()
