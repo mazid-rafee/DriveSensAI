@@ -4,7 +4,7 @@
 //
 //  Experimental geometric lane tracker from MultiCam rear frames.
 //  Not steering control — visual tracking + drift warning only.
-//  Frame-level perception is delegated to `LanePerceptionBackend` (default: GeometricLaneBackend).
+// Frame-level perception is delegated to `LanePerceptionBackend` (default: CoreMLLaneBackend with geometric fallback).
 //
 
 import Combine
@@ -30,7 +30,14 @@ final class LaneDetectionService: ObservableObject {
 
     nonisolated static let emaAlpha: CGFloat = 0.30
 
-    nonisolated static let confidenceAvailableThreshold: CGFloat = 0.45
+    /// Require stronger confidence to initially acquire lanes.
+    nonisolated static let confidenceAcquireThreshold: CGFloat = 0.45
+
+    /// Once acquired, tolerate short confidence dips before declaring lanes lost.
+    nonisolated static let confidenceKeepThreshold: CGFloat = 0.28
+
+    /// How long an already-acquired lane may stay weak before becoming unavailable.
+    nonisolated static let confidenceLossGraceDuration: TimeInterval = 0.60
 
     nonisolated static let driftEnterOffset: CGFloat = 0.55
     nonisolated static let driftExitOffset: CGFloat = 0.40
@@ -65,10 +72,13 @@ final class LaneDetectionService: ObservableObject {
     private var candidateDriftSide: LaneAssistState? // .driftingLeft / .driftingRight only
     private var candidateDriftSince: TimeInterval?
     private var centeredSince: TimeInterval?
+    private var lowConfidenceSince: TimeInterval?
 
     private var previousStateForLog: LaneAssistState = .unavailable
 
-    init(backend: any LanePerceptionBackend = GeometricLaneBackend()) {
+    init(
+        backend: any LanePerceptionBackend = CoreMLLaneBackend()
+    ) {
         self.backend = backend
     }
 
@@ -146,6 +156,7 @@ final class LaneDetectionService: ObservableObject {
     private func resetTracking() {
         smoothLeftX = nil
         smoothRightX = nil
+        lowConfidenceSince = nil
         smoothOffset = 0
         smoothConfidence = 0
         publishedState = .unavailable
@@ -195,6 +206,17 @@ final class LaneDetectionService: ObservableObject {
 
         let nextState = resolveState(uptime: uptime)
 
+        // If tracking was acquired but is now genuinely lost,
+        // remove stale lane geometry before the next acquisition.
+        if nextState == .unavailable,
+        publishedState != .unavailable {
+
+            smoothLeftX = nil
+            smoothRightX = nil
+            smoothOffset = 0
+            laneCenter = nil
+        }
+
         #if DEBUG
         debugSnapshot = LaneDebugSnapshot(
             leftX: smoothLeftX,
@@ -222,14 +244,50 @@ final class LaneDetectionService: ObservableObject {
     }
 
     private func resolveState(uptime: TimeInterval) -> LaneAssistState {
-        if smoothConfidence < Self.confidenceAvailableThreshold
+        let confidenceThreshold: CGFloat =
+            publishedState == .unavailable
+                ? Self.confidenceAcquireThreshold
+                : Self.confidenceKeepThreshold
+
+        let perceptionUnavailable =
+            smoothConfidence < confidenceThreshold
             || smoothLeftX == nil
-            || smoothRightX == nil {
+            || smoothRightX == nil
+
+        if perceptionUnavailable {
+
+            // If we have never acquired lanes yet, stay unavailable.
+            if publishedState == .unavailable {
+                lowConfidenceSince = nil
+                candidateDriftSide = nil
+                candidateDriftSince = nil
+                centeredSince = nil
+                return .unavailable
+            }
+
+            // We were tracking before. Start a short grace timer.
+            if lowConfidenceSince == nil {
+                lowConfidenceSince = uptime
+            }
+
+            if let started = lowConfidenceSince,
+                uptime - started < Self.confidenceLossGraceDuration {
+
+                // Keep visual tracking alive during a short dropout,
+                // but do not preserve a stale drift warning.
+                return .tracking
+            }
+
+            // Weak for too long -> actually lose tracking.
+            lowConfidenceSince = nil
             candidateDriftSide = nil
             candidateDriftSince = nil
             centeredSince = nil
             return .unavailable
         }
+
+        // Good frame again: cancel any pending loss timer.
+        lowConfidenceSince = nil
 
         let absOff = abs(smoothOffset)
         let warningSpeedOK =
