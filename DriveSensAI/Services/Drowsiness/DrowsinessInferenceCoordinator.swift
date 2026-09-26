@@ -7,11 +7,11 @@ import Combine
 import Foundation
 
 /// Buffers ~15 FPS feature rows and POSTs a T=20 window once per second.
-/// Publishes wake-up when the remote label is ``closed``, holding the banner for 5s.
+/// Publishes wake-up when the remote label is ``closed``, holding the banner for 3s.
 final class DrowsinessInferenceCoordinator: ObservableObject {
     /// Latest remote prediction.
     @Published private(set) var latestPrediction: DrowsinessPredictResponse?
-    /// True while the wake-up banner should be shown (closed detected, held 5s).
+    /// True while the wake-up warning banner should be shown (closed detected, held 3s).
     @Published private(set) var isWakeUpAlertActive = false
 
     private let client = DrowsinessAPIClient()
@@ -31,7 +31,7 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
     private let maxBuffer = DrowsinessFeatureContract.windowFrames * 4
     private let sendInterval: TimeInterval = 1.0
     private let wakeUpCloseThreshold = 4
-    private let wakeHoldDuration: TimeInterval = 0.4
+    private let wakeHoldDuration: TimeInterval = 3.0
     private static let closedLabel = "closed"
 
     func start() {
@@ -191,7 +191,7 @@ final class DrowsinessInferenceCoordinator: ObservableObject {
         // Non-closed labels do not clear an active hold — the timer owns dismissal.
     }
 
-    /// Show the wake banner and (re)start the 5s hold. Rising edges are observed by DriveView.
+    /// Show the wake banner and (re)start the 3s hold. Rising edges are observed by DriveView.
     @MainActor
     private func presentWakeUpAlert(holdDuration: TimeInterval) {
         isWakeUpAlertActive = true
