@@ -44,8 +44,8 @@ struct RouteSafetyDetailsModel: Equatable {
             tier = route.safetyTier
             switch route.safetyTier {
             case .safest: tierLabel = "Safest"
-            case .medium: tierLabel = "Medium safety"
-            case .unsafest: tierLabel = "Unsafest"
+            case .medium: tierLabel = "Medium Risk"
+            case .unsafest: tierLabel = "High Risk"
             case .none: tierLabel = "Unscored"
             }
         }
